@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Análise de Processos Judiciais</title>
+<style>
+  :root { --bg:#f6f8fa; --card:#fff; --ink:#0f1b2d; --muted:#5b6b7f; --brand:#0b6a94; --line:#dde3ea; --ok:#1a7f4b; --err:#b42318; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0e141b; --card:#16202b; --ink:#e8eef5; --muted:#93a4b8; --brand:#4db3e0; --line:#2a3a4b; --ok:#4cc38a; --err:#ff7b72; } }
+  * { box-sizing:border-box } body { margin:0; font:15px/1.5 system-ui,sans-serif; background:var(--bg); color:var(--ink) }
+  main { max-width:1100px; margin:0 auto; padding:24px 16px; display:grid; gap:16px; grid-template-columns:1fr 1.2fr }
+  @media (max-width:800px) { main { grid-template-columns:1fr } }
+  h1 { grid-column:1/-1; margin:0; font-size:22px } h1 small { display:block; color:var(--muted); font-weight:400; font-size:14px }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px }
+  h2 { margin:0 0 12px; font-size:16px; color:var(--brand) }
+  button { background:var(--brand); color:#fff; border:0; border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer }
+  button:disabled { opacity:.5; cursor:default } a.btn { color:var(--brand) }
+  input[type=text] { flex:1; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font:inherit }
+  .doc { border-top:1px solid var(--line); padding:10px 0 } .doc:first-of-type { border-top:0 }
+  .doc.sel { background:color-mix(in srgb,var(--brand) 10%,transparent) }
+  .bar { height:6px; background:var(--line); border-radius:3px; overflow:hidden; margin:6px 0 }
+  .bar i { display:block; height:100%; background:var(--brand); transition:width .3s }
+  .st-done { color:var(--ok) } .st-error { color:var(--err) } .muted { color:var(--muted); font-size:13px }
+  #log { height:340px; overflow:auto; border:1px solid var(--line); border-radius:6px; padding:10px; margin-bottom:10px; background:var(--bg) }
+  .msg { margin:0 0 12px; white-space:pre-wrap } .msg.u { color:var(--brand); font-weight:600 }
+  .src { font-size:12px; color:var(--muted); margin-top:4px } .row { display:flex; gap:8px }
+</style>
+</head>
+<body>
+<main>
+  <h1>Análise e Ingestão de Processos Judiciais<small>Upload do PDF → OCR e indexação assíncronos → planilha preenchida e chatbot analítico</small></h1>
+  <section>
+    <h2>1. Processos</h2>
+    <div class="row"><input type="file" id="file" accept="application/pdf"><button id="up">Enviar</button></div>
+    <p class="muted" id="msg"></p>
+    <div id="docs"></div>
+  </section>
+  <section>
+    <h2>2. Chatbot analítico <span class="muted" id="target"></span></h2>
+    <div id="log"><p class="muted">Selecione um processo concluído e pergunte, por exemplo: “Existe valor bloqueado pelo SISBAJUD?”</p></div>
+    <form class="row" id="form"><input type="text" id="q" placeholder="Pergunte sobre o processo…" autocomplete="off"><button id="ask">Perguntar</button></form>
+  </section>
+</main>
+<script>
+let selected = null;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function refresh() {
+  const docs = await (await fetch('/api/documents')).json();
+  $('docs').innerHTML = docs.map(d => {
+    const pct = d.pages_total ? Math.round(100 * d.pages_done / d.pages_total) : 0;
+    const done = d.status === 'done';
+    return `<div class="doc ${selected===d.id?'sel':''}" data-id="${d.id}">
+      <b>${esc(d.filename)}</b> <span class="st-${d.status}">${esc(d.status)}</span>
+      <div class="bar"><i style="width:${done?100:pct}%"></i></div>
+      <span class="muted">${d.pages_done}/${d.pages_total} páginas · ${d.pages_ocr} via OCR</span>
+      ${d.error ? `<div class="st-error">${esc(d.error)}</div>` : ''}
+      ${done ? ` · <a class="btn" href="/api/documents/${d.id}/spreadsheet">Baixar planilha</a>` : ''}
+    </div>`;
+  }).join('') || '<p class="muted">Nenhum processo enviado.</p>';
+  document.querySelectorAll('.doc').forEach(e => e.onclick = () => { selected = e.dataset.id; $('target').textContent = '(' + e.querySelector('b').textContent + ')'; refresh(); });
+}
+$('up').onclick = async () => {
+  const f = $('file').files[0]; if (!f) return;
+  $('up').disabled = true; $('msg').textContent = 'Enviando…';
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/api/documents', { method: 'POST', body: fd });
+  const j = await r.json();
+  $('msg').textContent = r.ok ? 'Enviado. Processamento em segundo plano.' : (j.detail || 'Erro no envio.');
+  if (r.ok) selected = j.id;
+  $('up').disabled = false; refresh();
+};
+function add(cls, html) { const p = document.createElement('div'); p.className = 'msg ' + cls; p.innerHTML = html; $('log').appendChild(p); $('log').scrollTop = 1e9; }
+$('form').onsubmit = async e => {
+  e.preventDefault();
+  const q = $('q').value.trim(); if (!q) return;
+  if (!selected) { add('', 'Selecione um processo na lista.'); return; }
+  $('q').value = ''; add('u', esc(q));
+  const r = await fetch('/api/chat', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({question: q, doc_id: selected}) });
+  const j = await r.json();
+  if (!r.ok) { add('', esc(j.detail || 'Erro.')); return; }
+  const pages = [...new Set(j.sources.map(s => s.page))].sort((a,b)=>a-b);
+  add('', esc(j.answer) + (pages.length ? `<div class="src">Fontes: p. ${pages.join(', ')}</div>` : ''));
+};
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>
