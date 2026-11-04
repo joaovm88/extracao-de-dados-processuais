@@ -37,11 +37,12 @@ async function refreshCase() {
 async function selectDoc(id) {
   selDoc = id; const d = await api(`/api/documents/${id}`); const r = d.result; const f = r.fields;
   $('review').classList.remove('hidden');
-  $('rev-title').textContent = `${d.numero_processo || d.filename} (modelo: ${r.prompt})`;
+  $('rev-title').textContent = `${d.numero_processo || d.filename} (modelo: ${r.prompt} · ${r.sistema || "sistema não detectado"})`;
   $('rev-form').innerHTML = Object.entries(f).filter(([k]) => !['observacoes', 'digitalizado'].includes(k)).map(([k, v]) =>
     `<div class="field"><label for="f-${k}">${esc(k.replace(/_/g, ' '))}</label><input type="text" id="f-${k}" data-k="${k}" value="${esc(v)}">
      <span class="cit">${esc((r.citacoes || {})[k] || '')}</span></div>`).join('') +
     `<div class="field"><label for="f-obs">Observações relevantes (relatório)</label><textarea id="f-obs">${esc(f.observacoes)}</textarea></div>` +
+    (r.citacoes_invalidas?.length ? `<p class="tag err">Citações que não existem no PDF (conferir): ${esc(r.citacoes_invalidas.join('; '))}</p>` : '') +
     (r.revisar?.length ? `<p class="tag warn">Campos fora da lista permitida, revisar: ${esc(r.revisar.join(', '))}</p>` : '') +
     (r.bens?.length ? `<p class="hint">${r.bens.length} bem(ns) extraído(s) para a aba Outros Bens.</p>` : '') +
     `<button class="btn primary">Salvar e marcar como revisado</button> <span id="rev-msg" role="status"></span>`;
@@ -61,7 +62,7 @@ $('mcfly-btn').onclick = async () => {
 };
 $('pdfs-btn').onclick = async () => {
   const files = [...$('pdfs').files]; if (!files.length) return; $('msg').textContent = 'Enviando…';
-  for (const f of files) { const fd = new FormData(); fd.append('file', f); fd.append('case_id', caseId);
+  for (const f of files) { const fd = new FormData(); fd.append('file', f); fd.append('case_id', caseId); fd.append('tipo', $('tipo').value); fd.append('sistema', $('sistema').value);
     try { await api('/api/documents', {method: 'POST', body: fd}); } catch (e) { $('msg').textContent = `${f.name}: ${e.message}`; return; } }
   $('msg').textContent = `${files.length} arquivo(s) enviado(s). Processamento em segundo plano.`; refreshCase();
 };
@@ -74,5 +75,6 @@ $('chat').onsubmit = async e => {
     add('', esc(j.answer) + (j.sources.length ? `<div class="src">Fontes: ${[...new Set(j.sources.map(s => s.rotulo))].map(esc).join(' · ')}</div>` : '')); }
   catch (err) { add('', esc(err.message)); }
 };
+api('/api/tipos').then(t => { for (const [k, v] of Object.entries(t.tipos)) $('tipo').add(new Option(v, k)); for (const [k, v] of Object.entries(t.sistemas)) $('sistema').add(new Option(v, k)); });
 api('/api/health').then(h => $('llm').textContent = h.llm ? 'IA ativa: ' + h.llm : 'IA desativada (sem chave)').catch(() => {});
 loadCases();

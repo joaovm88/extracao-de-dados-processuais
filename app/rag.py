@@ -31,7 +31,8 @@ def _structured_hint(question: str, doc: Optional[dict]) -> str:
 
 
 def _lab(doc: Optional[dict], page: int) -> str:
-    return label((doc or {}).get("volume"), page)
+    rot = ((doc or {}).get("metadata") or {}).get("rotulos") or {}
+    return rot.get(str(page)) or label((doc or {}).get("volume"), page)
 
 
 def _extractive_answer(question: str, hits: list[Hit], hint_doc: Optional[dict]) -> str:

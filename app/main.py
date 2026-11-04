@@ -15,7 +15,7 @@ from .export import build_case_xlsx
 from .llm import get_llm
 from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
-from .schemas import SHEETS
+from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
 from .worker import run_worker
 
@@ -59,6 +59,10 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": llm.name if llm else None}
+
+    @app.get("/api/tipos")
+    def tipos():
+        return {"tipos": {k: v[0] for k, v in TIPOS.items()}, "sistemas": SISTEMAS}
 
     # ---- casos (devedor)
     @app.post("/api/cases", status_code=201)
@@ -107,7 +111,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     @app.post("/api/documents", status_code=202)
     async def upload(file: UploadFile = File(...), case_id: Optional[str] = Form(None),
                      volume: Optional[int] = Form(None), pagina_inicial: Optional[int] = Form(None),
-                     numero_processo: Optional[str] = Form(None)):
+                     numero_processo: Optional[str] = Form(None), tipo: Optional[str] = Form(None),
+                     sistema: Optional[str] = Form(None)):
+        tipo, sistema = tipo or None, sistema or None  # "" = automático
+        if tipo and tipo not in TIPOS:
+            raise HTTPException(400, f"Tipo inválido. Use: {', '.join(TIPOS)}")
+        if sistema and sistema not in SISTEMAS:
+            raise HTTPException(400, f"Sistema inválido. Use: {', '.join(SISTEMAS)}")
         if not (file.filename or "").lower().endswith(".pdf"):
             raise HTTPException(400, "Envie um arquivo PDF.")
         if case_id:
@@ -131,7 +141,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         info = parse_filename(Path(file.filename).name)  # nº CNJ, volume e página inicial vêm do nome do arquivo
         db.create(doc_id, Path(file.filename).name, str(dest), case_id,
                   numero_processo=numero_processo or info["numero_processo"],
-                  volume=volume if volume is not None else info["volume"], evento=info["evento"],
+                  volume=volume if volume is not None else info["volume"], evento=info["evento"], tipo=tipo, sistema=sistema,
                   page_start=pagina_inicial or info["pagina_inicial"] or 1)
         queue.enqueue(doc_id)
         return {"id": doc_id, "status": "queued", **info}

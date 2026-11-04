@@ -10,7 +10,7 @@ from .llm import get_llm
 from .ingest import citation, entities
 from .ingest.chunker import chunk_page
 from .ingest.pdf import iter_pages, page_count
-from .schemas import NAO_ENCONTRADO, SHEETS, classify
+from .schemas import NAO_ENCONTRADO, SHEETS, resolve_tipo
 from .search.base import SearchStore
 
 log = logging.getLogger("worker")
@@ -52,14 +52,18 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         vol = doc.get("volume")
         info = citation.parse_filename(doc["filename"])
         file_refs = {k: v for k, v in (("evento", doc.get("evento") or info.get("evento")),) if v}
+        last_refs: dict = {}
         pages: list[dict] = []
         methods: dict[int, str] = {}
         batch: list = []
         ocr_pages = 0
         for pr in iter_pages(doc["path"], settings):
             absp = start + pr.number - 1  # página no volume/processo original
-            refs = {**(file_refs), **citation.page_refs(pr.text)}
-            pages.append({"page": absp, "text": pr.text, "refs": refs, "label": citation.label(vol, absp, refs)})
+            own = citation.page_refs(pr.text)
+            if "evento" in own or "id" in own:  # marcador novo: vale daqui em diante
+                last_refs = {k: v for k, v in own.items() if k in ("evento", "id")}
+            refs = {**file_refs, **last_refs, **own}  # páginas sem marcador herdam o ato anterior
+            pages.append({"page": absp, "text": pr.text, "refs": refs})
             methods[absp] = pr.method
             ocr_pages += pr.method == "ocr"
             batch.extend(chunk_page(absp, pr.text))
@@ -71,29 +75,37 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         if batch:
             store.index(doc_id, batch)
 
+        sistema = doc.get("sistema") or citation.detect_system([p["refs"] for p in pages], [p["text"] for p in pages[:20]])
+        for p in pages:
+            p["label"] = citation.label(vol, p["page"], p["refs"], sistema)
         meta = entities.extract((p["page"], p["text"]) for p in pages)
         meta["paginas_sem_texto"] = sorted(n for n, m in methods.items() if m in ("ocr_unavailable", "empty"))
         meta["paginas_texto_degradado"] = sorted(n for n, m in methods.items() if m == "text_degraded")
+        meta["rotulos"] = {str(p["page"]): p["label"] for p in pages}
         meta["metodo_por_pagina"] = {"texto": sum(m == "text" for m in methods.values()), "ocr": ocr_pages}
         numero = _resolve_numero(db, doc, meta)
 
         classe = _find_classe(db, doc)
-        sheet_key, prompt = classify(classe)
+        sheet_key, prompt = resolve_tipo(doc.get("tipo"), classe)
         sheet = SHEETS[sheet_key]
         result = {"sheet": sheet_key, "prompt": prompt, "fields": {"digitalizado": "SIM"}, "bens": [], "fraudes": [],
-                  "citacoes": {}, "revisar": [], "modo": "sem_llm"}
+                  "citacoes": {}, "revisar": [], "modo": "sem_llm", "sistema": sistema,
+                  "citacoes_invalidas": []}
         llm = llm_client or get_llm(settings)
         if llm is not None:
             context = ex.select_context(pages, CONTEXT_BUDGET, store, doc_id)
-            out = ex.extract_with_llm(sheet, prompt, context, llm)
+            out = ex.extract_with_llm(sheet, prompt, context, llm, sistema)
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
                           revisar=out["_revisar"], modo="llm", provedor=llm.name)
+            texts = [str(v) for v in result["fields"].values() if v] + list(result["citacoes"].values())
+            texts += [str(v) for b in result["bens"] + result["fraudes"] for v in b.values() if v]
+            result["citacoes_invalidas"] = ex.check_citations(texts, pages, sistema)
         else:
             result["fields"]["observacoes"] = (
                 f"{NAO_ENCONTRADO}: extração por IA indisponível (nenhuma chave de LLM configurada: GEMINI_API_KEY ou ANTHROPIC_API_KEY).")
         db.update(doc_id, status="done", pages_done=total, pages_ocr=ocr_pages, metadata=meta,
-                  numero_processo=numero, classe=classe, sheet=sheet_key, result=result, reviewed=0)
+                  numero_processo=numero, classe=classe, sheet=sheet_key, sistema=sistema, result=result, reviewed=0)
     except Exception as e:  # noqa: BLE001
         log.exception("falha ao processar %s", doc_id)
         db.update(doc_id, status="error", error=str(e))

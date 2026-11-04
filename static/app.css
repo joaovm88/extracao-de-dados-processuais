@@ -29,3 +29,4 @@ th,td{padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}tr
 .field{margin:12px 0}.field label{font-weight:600;display:block;margin-bottom:2px}.field .cit{font-size:12px;color:var(--muted)}
 textarea{min-height:220px;font-family:inherit}.hidden{display:none}.sr{position:absolute;left:-9999px}.scroll{overflow:auto}
 code{background:var(--blue-l);padding:1px 4px;border-radius:3px;font-size:12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:600px){.grid2{grid-template-columns:1fr}}

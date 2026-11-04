@@ -256,3 +256,82 @@ def test_provider_selection(monkeypatch):
     assert isinstance(get_llm(Settings()), GeminiProvider)  # auto prefere Gemini
     monkeypatch.setenv("LLM_PROVIDER", "anthropic")
     assert isinstance(get_llm(Settings()), AnthropicProvider)
+
+
+def _pdf_with_footers(path, footers):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    c = canvas.Canvas(str(path), pagesize=A4)
+    for i, ft in enumerate(footers, start=1):
+        c.drawString(60, 800, f"Despacho da página {i}. Determino a penhora do imóvel de matrícula 28.749 e a avaliação.")
+        c.drawString(60, 780, "Processo 1234567-89.2023.8.26.0100 em andamento perante o juízo da execução fiscal.")
+        if ft:
+            c.drawString(60, 40, ft)
+        c.showPage()
+    c.save()
+
+
+def _upload(c, tmp, name, footers, **form):
+    pdf = tmp / name
+    _pdf_with_footers(pdf, footers)
+    with pdf.open("rb") as f:
+        up = c.post("/api/documents", data=form, files={"file": (name, f, "application/pdf")})
+    assert up.status_code == 202, up.text
+    return wait(c, up.json()["id"])
+
+
+def test_pje_cites_id_and_page_within_document_never_evento(env):
+    c, llm, tmp = env
+    d = _upload(c, tmp, "proc.pdf", ["Num. 3160597 - Pág. 1", "Num. 3160597 - Pág. 2", "Num. 3160609 - Pág. 1"])
+    assert d["sistema"] == "pje"
+    labels = d["metadata"]["rotulos"]
+    assert labels == {"1": "ID 3160597, pg. 1", "2": "ID 3160597, pg. 2", "3": "ID 3160609, pg. 1"}
+    assert "Evento" not in llm.calls[0]["user"]
+    assert "SISTEMA: PJe" in llm.calls[0]["system"] and "NUNCA use 'Evento'" in llm.calls[0]["system"]
+
+
+def test_eproc_cites_evento_never_id_and_inherits_across_pages(env):
+    c, llm, tmp = env
+    d = _upload(c, tmp, "Evento_28.pdf", [":: 60000006508 - eproc - ::", None], sistema="eproc")
+    assert d["sistema"] == "eproc"
+    assert d["metadata"]["rotulos"] == {"1": "Evento 28, pg. 1", "2": "Evento 28, pg. 2"}
+    assert "SISTEMA: eproc" in llm.calls[0]["system"] and "NUNCA use 'ID'" in llm.calls[0]["system"]
+
+
+def test_tipo_chosen_in_upload_selects_sheet_and_prompt(env):
+    c, llm, tmp = env
+    d = _upload(c, tmp, "a.pdf", [None], tipo="apelacao")
+    assert d["sheet"] == "outras_acoes" and d["result"]["prompt"] == "recursos"
+    assert "Relatório de Tramitação Recursal" in llm.calls[-1]["system"]
+    d = _upload(c, tmp, "b.pdf", [None], tipo="embargos")
+    assert d["sheet"] == "embargos"
+    d = _upload(c, tmp, "c.pdf", [None], tipo="execucao_fiscal")
+    assert d["sheet"] == "execucoes_fiscais" and d["result"]["prompt"] == "execucoes_fiscais"
+    assert c.get("/api/tipos").json()["tipos"]["execucao_fiscal"] == "Execução Fiscal"
+
+
+def test_invalid_tipo_or_sistema_rejected(env):
+    c, _, tmp = env
+    for form in ({"tipo": "xpto"}, {"sistema": "projudi"}):
+        r = c.post("/api/documents", data=form, files={"file": ("x.pdf", b"%PDF-1.4", "application/pdf")})
+        assert r.status_code == 400
+
+
+def test_check_citations_flags_invented_and_system_mixups():
+    pages = [{"page": 1, "refs": {"evento": "28"}}, {"page": 2, "refs": {"evento": "28"}}]
+    ok = ex.check_citations(["Evento 28, pg. 2 - Penhora"], pages, "eproc")
+    assert ok == []
+    bad = ex.check_citations(["Evento 99 - x; ID 123456789 - y; pg. 77"], pages, "eproc")
+    assert set(bad) == {"Evento 99", "ID 123456789", "pg. 77"}
+    pje = [{"page": 5, "refs": {"id": "3160597", "pg": "1"}}]
+    assert ex.check_citations(["ID 3160597, pg. 1"], pje, "pje") == []
+    assert ex.check_citations(["Evento 4 - x"], pje, "pje") == ["Evento 4"]
+    assert ex.check_citations(["ID.5896152995, pg. 09/10"], [{"page": 9, "refs": {"id": "5896152995"}}, {"page": 10, "refs": {}}], "pje") == []
+
+
+def test_invented_citation_from_llm_is_flagged_in_result(env):
+    c, llm, tmp = env
+    llm.payload = {**llm.payload, "observacoes": "Evento 99 - Penhora (pg. 1)"}
+    d = _upload(c, tmp, "Evento_28.pdf", [None, None], sistema="eproc")
+    assert "Evento 99" in d["result"]["citacoes_invalidas"]

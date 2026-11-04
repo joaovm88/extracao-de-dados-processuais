@@ -111,3 +111,21 @@ def classify(classe: str) -> tuple[str, str]:
     if any(w in c for w in ("apela", "agravo", "recurso", "remessa", "acórdão")):
         return "outras_acoes", "recursos"
     return "outras_acoes", "outras_acoes"
+
+
+# Tipo escolhido pelo analista no upload -> (rótulo, aba, prompt). Tem prioridade sobre a classe do Mcfly.
+TIPOS = {
+    "execucao_fiscal": ("Execução Fiscal", "execucoes_fiscais", "execucoes_fiscais"),
+    "embargos": ("Embargos à Execução", "embargos", "outras_acoes"),
+    "apelacao": ("Apelação / Recurso", "outras_acoes", "recursos"),
+    "agravo": ("Agravo de Instrumento", "outras_acoes", "recursos"),
+    "outras_acoes": ("Outras ações (MS, anulatória, cautelar…)", "outras_acoes", "outras_acoes"),
+}
+SISTEMAS = {"eproc": "eproc", "pje": "PJe"}
+
+
+def resolve_tipo(tipo: str | None, classe: str) -> tuple[str, str]:
+    """(aba, prompt): tipo escolhido > classe do cadastro > padrão."""
+    if tipo in TIPOS:
+        return TIPOS[tipo][1], TIPOS[tipo][2]
+    return classify(classe)
