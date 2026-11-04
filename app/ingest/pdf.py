@@ -6,13 +6,14 @@ from typing import Iterator
 import pymupdf as fitz  # PyMuPDF
 
 from ..config import Settings
+from .quality import is_degraded, repair_cyrillic
 
 
 @dataclass
 class PageResult:
     number: int  # 1-based
     text: str
-    method: str  # "text" | "ocr" | "ocr_unavailable" | "empty"
+    method: str  # "text" | "ocr" | "ocr_unavailable" | "empty" | "text_degraded"
 
 
 def ocr_available() -> bool:
@@ -40,8 +41,19 @@ def iter_pages(path: str, settings: Settings) -> Iterator[PageResult]:
     with fitz.open(path) as doc:
         for i, page in enumerate(doc, start=1):
             text = page.get_text("text").strip()
-            if len(text) >= settings.min_text_chars:
+            if len(text) >= settings.min_text_chars and not is_degraded(text):
                 yield PageResult(i, text, "text")
+                continue
+            if len(text) >= settings.min_text_chars:  # há texto, mas corrompido: refaz o OCR da imagem
+                if has_ocr:
+                    try:
+                        ocr_text = _ocr_page(page, settings).strip()
+                        if ocr_text:
+                            yield PageResult(i, ocr_text, "ocr")
+                            continue
+                    except Exception:
+                        pass
+                yield PageResult(i, repair_cyrillic(text), "text_degraded")
                 continue
             # página sem texto útil (digitalizada): OCR
             if not has_ocr:
