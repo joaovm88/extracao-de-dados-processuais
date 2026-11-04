@@ -1,0 +1,29 @@
+# Arquitetura do plano: API -> fila (Redis) -> worker de ingestão -> metadados + Elasticsearch -> RAG
+x-env: &env
+  QUEUE_BACKEND: redis
+  REDIS_URL: redis://redis:6379/0
+  SEARCH_BACKEND: elasticsearch
+  ELASTICSEARCH_URL: http://elasticsearch:9200
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  DATA_DIR: /data
+services:
+  api:
+    build: .
+    environment: *env
+    ports: ["8000:8000"]
+    volumes: ["data:/data"]
+    depends_on: [redis, elasticsearch]
+  worker:
+    build: .
+    command: python -m app.run_worker
+    environment: *env
+    volumes: ["data:/data"]
+    depends_on: [redis, elasticsearch]
+    deploy: { replicas: 2 }
+  redis:
+    image: redis:7-alpine
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
+    environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms1g -Xmx1g" }
+    volumes: ["esdata:/usr/share/elasticsearch/data"]
+volumes: { data: {}, esdata: {} }
