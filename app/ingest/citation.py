@@ -16,6 +16,7 @@ _EPROC_SEP = re.compile(r"P[ÁA]GINA DE SEPARA[ÇC][ÃA]O.{0,120}?\bEvento\s+(\d
 _CLASSE = re.compile(r"Classe da a[çc][ãa]o:\s*\n?\s*([^\n]+)")
 _ID2 = re.compile(r"\bID[.\s:]*(\d{7,})")
 _EPROC_ID = re.compile(r":: (\d{8,}) - eproc|c[óo]digo verificador (\d{8,})v\d")  # documentos baixados do eproc
+_PARTE = re.compile(r"PARTE[_\s-]*(\d+)", re.IGNORECASE)
 _EVT_FILE = re.compile(r"Evento[_\s-]*0*(\d{1,4})", re.IGNORECASE)
 _ID_FILE = re.compile(r"(?<!\d)(\d{9,})(?!\d)(?=_-_eproc|\s*-\s*eproc)")
 
@@ -30,7 +31,8 @@ def parse_filename(name: str) -> dict:
     return {"numero_processo": cnj.group(1) if cnj else None,
             "volume": int(vol.group(1)) if vol else None,
             "pagina_inicial": first,
-            "evento": evt.group(1) if evt else None}
+            "evento": evt.group(1) if evt else None,
+            "parte": int(pt.group(1)) if (pt := _PARTE.search(stem)) else None}
 
 
 def page_refs(text: str) -> dict:

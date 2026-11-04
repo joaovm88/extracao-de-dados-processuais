@@ -45,27 +45,27 @@ def tool_schema(sheet: Sheet) -> dict:
     return {"type": "object", "properties": props, "required": ["observacoes"]}
 
 
-def select_context(pages: list[dict], budget: int, store=None, doc_id: Optional[str] = None) -> str:
-    """pages: [{'page': abs, 'label': 'VOL 001, pg. 160', 'text': ...}]. Processos pequenos vão inteiros;
-    grandes usam recuperação híbrida por campo, mantendo a ordem cronológica."""
+def select_context(pages: list[dict], budget: int, store=None, doc_ids: Optional[list[str]] = None) -> str:
+    """pages: [{'doc_id', 'page', 'label', 'text'}] na ordem dos autos (todas as partes juntas).
+    Processos pequenos vão inteiros; grandes usam recuperação híbrida por campo + as páginas finais
+    (estado atual), sempre em ordem cronológica."""
     total = sum(len(p["text"]) for p in pages)
     chosen = pages
     if total > budget and store is not None:
-        by_page = {p["page"]: p for p in pages}
+        index = {(p["doc_id"], p["page"]): i for i, p in enumerate(pages)}
         keep: set[int] = set()
         for q in _FIELD_QUERIES.values():
-            for h in store.search(q, doc_id, 12):
-                keep.add(h.page)
-        chosen = [by_page[n] for n in sorted(keep) if n in by_page]
-        # preenche o orçamento com as últimas páginas (estado atual do processo)
-        used = sum(len(p["text"]) for p in chosen)
-        for p in reversed(pages):
+            for h in store.search(q, doc_ids, 12):
+                if (h.doc_id, h.page) in index:
+                    keep.add(index[(h.doc_id, h.page)])
+        used = sum(len(pages[i]["text"]) for i in keep)
+        for i in range(len(pages) - 1, -1, -1):  # preenche o orçamento com as últimas páginas
             if used > budget:
                 break
-            if p["page"] not in keep:
-                chosen.append(p)
-                used += len(p["text"])
-        chosen.sort(key=lambda p: p["page"])
+            if i not in keep:
+                keep.add(i)
+                used += len(pages[i]["text"])
+        chosen = [pages[i] for i in sorted(keep)]
     out, used = [], 0
     for p in chosen:
         if used + len(p["text"]) > budget:

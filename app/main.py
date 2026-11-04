@@ -17,13 +17,15 @@ from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
 from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
-from .worker import run_worker
+from .worker import EXTRACT_PREFIX, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class ChatIn(BaseModel):
     question: str
+    case_id: Optional[str] = None
+    numero: Optional[str] = None  # processo (todas as partes); alternativa: doc_id de um PDF
     doc_id: Optional[str] = None
 
 
@@ -81,11 +83,66 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(404, "Caso não encontrado.")
         return c
 
+    def _estado(p: dict) -> str:
+        if p.get("error") and not p.get("result"):
+            return "erro"
+        if p.get("stale") == 2:
+            return "extraindo"
+        if p.get("stale") == 1:
+            return "desatualizado" if p.get("reviewed") else "aguardando"
+        return "pronto" if p.get("result") else "sem_pdf"
+
     @app.get("/api/cases/{cid}")
     def get_case(cid: str):
         c = _case(cid)
-        return {**c, "processos": db.list_processes(cid),
-                "documentos": [{k: v for k, v in d.items() if k not in ("metadata",)} for d in db.list(cid)]}
+        docs = [{k: v for k, v in d.items() if k != "metadata"} for d in db.list(cid)]
+        procs = []
+        for p in db.list_processes(cid):
+            res = p.get("result")
+            procs.append({**{k: p.get(k) for k in ("numero", "mcfly", "classe", "sheet", "sistema", "tipo", "reviewed", "stale", "error")},
+                          "estado": _estado(p), "modelo": res["prompt"] if res else None,
+                          "documentos": [d["id"] for d in docs if d["numero_processo"] == p["numero"]]})
+        return {**c, "processos": procs, "documentos": docs}
+
+    @app.get("/api/cases/{cid}/processes/{numero}")
+    def get_process(cid: str, numero: str):
+        p = db.get_process(cid, numero)
+        if not p:
+            raise HTTPException(404, "Processo não encontrado.")
+        return {**p, "estado": _estado(p)}
+
+    @app.put("/api/cases/{cid}/processes/{numero}/review")
+    def review(cid: str, numero: str, body: ReviewIn):
+        p = db.get_process(cid, numero)
+        if not p or not p.get("result"):
+            raise HTTPException(404, "Processo sem extração para revisar.")
+        res = p["result"]
+        sheet = SHEETS[res["sheet"]]
+        for k, v in (body.fields or {}).items():
+            f = next((x for x in sheet.fields if x.key == k), None)
+            if f is None:
+                raise HTTPException(400, f"Campo desconhecido: {k}")
+            if f.options and v is not None and v not in f.options:
+                raise HTTPException(400, f"Valor inválido para '{f.header}'. Permitidos: {', '.join(f.options)}")
+            res["fields"][k] = v
+        if body.observacoes is not None:
+            res["fields"]["observacoes"] = body.observacoes
+        if body.bens is not None:
+            res["bens"] = body.bens
+        if body.fraudes is not None:
+            res["fraudes"] = body.fraudes
+        db.update_process(cid, numero, result=res, reviewed=int(body.reviewed))
+        return {"ok": True}
+
+    @app.post("/api/cases/{cid}/processes/{numero}/reextract", status_code=202)
+    def reextract(cid: str, numero: str):
+        """Refaz a extração juntando todas as partes (descarta edições da revisão)."""
+        if not db.get_process(cid, numero):
+            raise HTTPException(404, "Processo não encontrado.")
+        db.update_process(cid, numero, reviewed=0)
+        db.mark_stale(cid, numero)
+        queue.enqueue(f"{EXTRACT_PREFIX}{cid}|{numero}")
+        return {"status": "queued"}
 
     @app.post("/api/cases/{cid}/mcfly")
     async def import_mcfly(cid: str, file: UploadFile = File(...)):
@@ -103,7 +160,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     @app.get("/api/cases/{cid}/spreadsheet")
     def case_spreadsheet(cid: str):
         c = _case(cid)
-        data = build_case_xlsx(c, db.list_processes(cid), db.list(cid))
+        data = build_case_xlsx(c, db.list_processes(cid))
         return Response(data, media_type=XLSX,
                         headers={"Content-Disposition": f'attachment; filename="Relatorio - {c["nome"]}.xlsx"'.encode("latin-1", "replace").decode("latin-1")})
 
@@ -120,8 +177,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(400, f"Sistema inválido. Use: {', '.join(SISTEMAS)}")
         if not (file.filename or "").lower().endswith(".pdf"):
             raise HTTPException(400, "Envie um arquivo PDF.")
-        if case_id:
-            _case(case_id)
+        case_id = _case(case_id)["id"] if case_id else db.avulsos_case()["id"]
         doc_id = uuid.uuid4().hex
         dest = s.upload_dir / f"{doc_id}.pdf"
         size, limit = 0, s.max_upload_mb * 1024 * 1024
@@ -139,10 +195,16 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             dest.unlink(missing_ok=True)
             raise HTTPException(400, "Arquivo não é um PDF válido.")
         info = parse_filename(Path(file.filename).name)  # nº CNJ, volume e página inicial vêm do nome do arquivo
+        vol = volume if volume is not None else info["volume"]
+        ini = pagina_inicial or info["pagina_inicial"] or 1
+        num = numero_processo or info["numero_processo"]
+        for old in db.list(case_id):  # mesmo trecho reenviado: substitui, não duplica
+            if num and old["numero_processo"] == num and old["volume"] == vol and old["page_start"] == ini and old["parte"] == info["parte"]:
+                store.delete(old["id"])
+                db.delete_doc(old["id"])
         db.create(doc_id, Path(file.filename).name, str(dest), case_id,
-                  numero_processo=numero_processo or info["numero_processo"],
-                  volume=volume if volume is not None else info["volume"], evento=info["evento"], tipo=tipo, sistema=sistema,
-                  page_start=pagina_inicial or info["pagina_inicial"] or 1)
+                  numero_processo=num, volume=vol, evento=info["evento"], parte=info["parte"], tipo=tipo,
+                  sistema=sistema, page_start=ini)
         queue.enqueue(doc_id)
         return {"id": doc_id, "status": "queued", **info}
 
@@ -157,38 +219,22 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(404, "Documento não encontrado.")
         return d
 
-    @app.put("/api/documents/{doc_id}/review")
-    def review(doc_id: str, body: ReviewIn):
-        d = db.get(doc_id)
-        if not d or not d.get("result"):
-            raise HTTPException(404, "Documento sem extração para revisar.")
-        res = d["result"]
-        sheet = SHEETS[res["sheet"]]
-        for k, v in (body.fields or {}).items():
-            f = next((x for x in sheet.fields if x.key == k), None)
-            if f is None:
-                raise HTTPException(400, f"Campo desconhecido: {k}")
-            if f.options and v is not None and v not in f.options:
-                raise HTTPException(400, f"Valor inválido para '{f.header}'. Permitidos: {', '.join(f.options)}")
-            res["fields"][k] = v
-        if body.observacoes is not None:
-            res["fields"]["observacoes"] = body.observacoes
-        if body.bens is not None:
-            res["bens"] = body.bens
-        if body.fraudes is not None:
-            res["fraudes"] = body.fraudes
-        db.update(doc_id, result=res, reviewed=int(body.reviewed))
-        return {"ok": True}
-
     @app.post("/api/chat")
     def chat(body: ChatIn):
-        if body.doc_id:
+        if body.numero:
+            docs = db.docs_for_process(_case(body.case_id)["id"], body.numero) if body.case_id else []
+            if not docs:
+                raise HTTPException(404, "Processo sem PDFs processados.")
+        elif body.doc_id:
             d = db.get(body.doc_id)
             if not d:
                 raise HTTPException(404, "Documento não encontrado.")
             if d["status"] != "done":
                 raise HTTPException(409, "O documento ainda está sendo processado.")
-        return rag.answer(body.question, body.doc_id, s, db, store, llm)
+            docs = [d]
+        else:
+            docs = []
+        return rag.answer(body.question, docs, s, store, llm)
 
     static = Path(__file__).resolve().parent.parent / "static"
     app.mount("/", StaticFiles(directory=static, html=True), name="static")

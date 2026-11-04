@@ -66,17 +66,29 @@ def env(tmp_path, monkeypatch):
 
 
 def wait(c, doc_id):
-    for _ in range(100):
+    """Espera a ingestão do PDF e a extração do processo; devolve o documento + result/sheet do processo."""
+    for _ in range(150):
         d = c.get(f"/api/documents/{doc_id}").json()
         if d["status"] in ("done", "error"):
-            return d
+            break
         time.sleep(0.1)
-    raise AssertionError("timeout")
+    else:
+        raise AssertionError("timeout (ingestão)")
+    if d["status"] == "done" and d["numero_processo"]:
+        for _ in range(150):
+            p = c.get(f"/api/cases/{d['case_id']}/processes/{d['numero_processo']}").json()
+            if p.get("stale") == 0 and (p.get("result") or p.get("error")):
+                d.update(result=p["result"], sheet=p["sheet"], process=p)
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError("timeout (extração)")
+    return d
 
 
 def test_filename_and_citation():
     i = citation.parse_filename(f"{NUM}_V001_001-151-180.pdf")
-    assert i == {"numero_processo": NUM, "volume": 1, "pagina_inicial": 151, "evento": None}
+    assert i == {"numero_processo": NUM, "volume": 1, "pagina_inicial": 151, "evento": None, "parte": None}
     assert citation.parse_filename("qualquer.pdf")["numero_processo"] is None
     assert citation.label(1, 160, {"evento": "16", "id": "5896152995"}) == "Evento 16, VOL 001, pg. 160, ID 5896152995"
     assert citation.page_refs("Num. 123456789 - Pág. 3")["id"] == "123456789"
@@ -111,12 +123,12 @@ def test_select_context_large_doc_prefers_relevant_and_stays_in_budget():
     from app.ingest.chunker import chunk_page
     from app.search.memory import MemoryStore
 
-    pages = [{"page": i, "label": f"VOL 001, pg. {i}", "text": ("texto neutro " * 50) + (" penhora imóvel matrícula" if i == 40 else "")}
+    pages = [{"doc_id": "d", "page": i, "label": f"VOL 001, pg. {i}", "text": ("texto neutro " * 50) + (" penhora imóvel matrícula" if i == 40 else "")}
              for i in range(1, 101)]
     st = MemoryStore()
     for p in pages:
         st.index("d", chunk_page(p["page"], p["text"]))
-    ctx = ex.select_context(pages, 20_000, st, "d")
+    ctx = ex.select_context(pages, 20_000, st, ["d"])
     assert len(ctx) <= 21_000 and "[VOL 001, pg. 40]" in ctx
 
 
@@ -133,7 +145,7 @@ def test_case_flow_end_to_end(env):
     assert up["numero_processo"] == NUM and up["pagina_inicial"] == 151
     d = wait(c, up["id"])
     assert d["status"] == "done", d.get("error")
-    assert d["sheet"] == "execucoes_fiscais" and d["classe"].startswith("Execução Fiscal")
+    assert d["sheet"] == "execucoes_fiscais" and d["process"]["classe"].startswith("Execução Fiscal")
     assert d["result"]["fields"]["garantia"] == "IMÓVEL" and d["result"]["modo"] == "llm"
     # páginas absolutas e rótulo no contexto enviado ao LLM
     assert "[VOL 001, pg. 152]" in llm.calls[0]["user"]
@@ -141,9 +153,9 @@ def test_case_flow_end_to_end(env):
     assert d["result"]["provedor"] == "fake" and d["result"]["citacoes"] == {"garantia": "VOL 001, pg. 2"}
 
     # revisão: lista fechada é imposta
-    bad = c.put(f"/api/documents/{d['id']}/review", json={"fields": {"garantia": "CASA"}})
+    bad = c.put(f"/api/cases/{case['id']}/processes/{NUM}/review", json={"fields": {"garantia": "CASA"}})
     assert bad.status_code == 400
-    ok = c.put(f"/api/documents/{d['id']}/review", json={"fields": {"valor_garantia": "R$ 1,00"}, "reviewed": True})
+    ok = c.put(f"/api/cases/{case['id']}/processes/{NUM}/review", json={"fields": {"valor_garantia": "R$ 1,00"}, "reviewed": True})
     assert ok.status_code == 200
 
     x = c.get(f"/api/cases/{case['id']}/spreadsheet")
@@ -299,15 +311,18 @@ def test_eproc_cites_evento_never_id_and_inherits_across_pages(env):
     assert "SISTEMA: eproc" in llm.calls[0]["system"] and "NUNCA use 'ID'" in llm.calls[0]["system"]
 
 
-def test_tipo_chosen_in_upload_selects_sheet_and_prompt(env):
+@pytest.mark.parametrize("tipo,sheet,prompt,titulo", [
+    ("apelacao", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
+    ("agravo", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
+    ("embargos", "embargos", "outras_acoes", "Relatório de Status Processual"),
+    ("execucao_fiscal", "execucoes_fiscais", "execucoes_fiscais", "Relatório de Status de Execução e Penhoras"),
+    ("outras_acoes", "outras_acoes", "outras_acoes", "Relatório de Status Processual"),
+])
+def test_tipo_chosen_in_upload_selects_sheet_and_prompt(env, tipo, sheet, prompt, titulo):
     c, llm, tmp = env
-    d = _upload(c, tmp, "a.pdf", [None], tipo="apelacao")
-    assert d["sheet"] == "outras_acoes" and d["result"]["prompt"] == "recursos"
-    assert "Relatório de Tramitação Recursal" in llm.calls[-1]["system"]
-    d = _upload(c, tmp, "b.pdf", [None], tipo="embargos")
-    assert d["sheet"] == "embargos"
-    d = _upload(c, tmp, "c.pdf", [None], tipo="execucao_fiscal")
-    assert d["sheet"] == "execucoes_fiscais" and d["result"]["prompt"] == "execucoes_fiscais"
+    d = _upload(c, tmp, "a.pdf", [None], tipo=tipo)
+    assert d["sheet"] == sheet and d["result"]["prompt"] == prompt
+    assert titulo in llm.calls[-1]["system"]
     assert c.get("/api/tipos").json()["tipos"]["execucao_fiscal"] == "Execução Fiscal"
 
 
@@ -377,3 +392,91 @@ def test_citation_with_page_outside_the_act_is_flagged():
     pages = [{"page": 3, "refs": {"evento": "14", "pg": "1"}}, {"page": 4, "refs": {"evento": "14", "pg": "2"}}]
     assert ex.check_citations(["Evento 14, pg. 2 - Despacho"], pages, "eproc") == []
     assert ex.check_citations(["Evento 14, pg. 9 - Despacho"], pages, "eproc") == ["Evento 14, pg. 9"]
+
+
+def _make_part(path, first_page, lines_per_page):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    cv = canvas.Canvas(str(path), pagesize=A4)
+    for i, lines in enumerate(lines_per_page):
+        y = 800
+        for ln in [f"Folha original {first_page + i}."] + lines:
+            cv.drawString(50, y, ln)
+            y -= 20
+        cv.showPage()
+    cv.save()
+
+
+def test_several_parts_of_one_process_become_one_extraction_and_one_row(env):
+    c, llm, tmp = env
+    case = c.post("/api/cases", json={"nome": "Alfa"}).json()
+    c.post(f"/api/cases/{case['id']}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx())})
+    parts = [("001-1-2", 1, ["Petição inicial da execução fiscal contra a empresa devedora.", "Citação realizada por oficial de justiça."]),
+             ("001-3-4", 3, ["Auto de penhora do imóvel de matrícula 28.749 e depósito.", "Laudo de avaliação do imóvel penhorado."]),
+             ("001-5-6", 5, ["Hasta pública designada para leilão do bem penhorado.", "Despacho final aguardando praça."])]
+    ids = []
+    for suf, first, lines in parts:
+        pdf = tmp / f"{NUM}_V{suf}.pdf"
+        _make_part(pdf, first, [[x] for x in lines])
+        with pdf.open("rb") as f:
+            ids.append(c.post("/api/documents", data={"case_id": case["id"]}, files={"file": (pdf.name, f, "application/pdf")}).json()["id"])
+    # reenviar a mesma parte substitui a anterior (não duplica)
+    pdf = tmp / f"{NUM}_V001-3-4.pdf"
+    with (tmp / f"{NUM}_V001-3-4.pdf").open("rb") as f:
+        ids.append(c.post("/api/documents", data={"case_id": case["id"]}, files={"file": (pdf.name, f, "application/pdf")}).json()["id"])
+    d = wait(c, ids[-1])
+    for i in ids[:3]:
+        if i != ids[1]:
+            wait(c, i)
+    cs = c.get(f"/api/cases/{case['id']}").json()
+    assert len(cs["documentos"]) == 3  # a parte reenviada substituiu a antiga
+    procs = {p["numero"]: p for p in cs["processos"]}
+    assert set(procs) == {NUM, "0000001-00.2020.4.01.0000"}  # um processo, não um por PDF
+    assert procs[NUM]["estado"] == "pronto" and len(procs[NUM]["documentos"]) == 3
+
+    extracts = [x for x in llm.calls if "schema" in x]
+    assert len(extracts) == 1, "uma extração por processo, não uma por PDF"
+    ctx = extracts[0]["user"]
+    order = [ctx.index(f"[VOL 001, pg. {n}]") for n in range(1, 7)]
+    assert order == sorted(order), "partes juntadas na ordem dos autos"
+    assert "Hasta pública" in ctx and "Petição inicial" in ctx
+
+    res = c.get(f"/api/cases/{case['id']}/processes/{NUM}").json()["result"]
+    assert len(res["documentos"]) == 3 and res["paginas"] == 6
+
+    chat = c.post("/api/chat", json={"question": "Houve hasta pública no leilão do bem?", "case_id": case["id"], "numero": NUM}).json()
+    assert any("VOL 001, pg. 5" == s["rotulo"] or "VOL 001, pg. 6" == s["rotulo"] for s in chat["sources"])
+
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{case['id']}/spreadsheet").content))
+    assert wb["Relatório"].max_row == 3 and wb["Execuções Fiscais"].max_row == 2  # 1 linha por processo
+
+
+def test_new_part_after_review_marks_process_outdated_until_reextract(env):
+    c, llm, tmp = env
+    case = c.post("/api/cases", json={"nome": "Beta"}).json()
+    pdf = tmp / f"{NUM}_V001_001-1-1.pdf"
+    _make_part(pdf, 1, [["Penhora do imóvel."]])
+    with pdf.open("rb") as f:
+        d = wait(c, c.post("/api/documents", data={"case_id": case["id"], "tipo": "execucao_fiscal"}, files={"file": (pdf.name, f, "application/pdf")}).json()["id"])
+    assert c.put(f"/api/cases/{case['id']}/processes/{NUM}/review", json={"fields": {"valor_garantia": "R$ 7,00"}}).status_code == 200
+    n_before = len([x for x in llm.calls if "schema" in x])
+    pdf2 = tmp / f"{NUM}_V001_001-2-2.pdf"
+    _make_part(pdf2, 2, [["Hasta pública."]])
+    with pdf2.open("rb") as f:
+        new_id = c.post("/api/documents", data={"case_id": case["id"], "tipo": "execucao_fiscal"}, files={"file": (pdf2.name, f, "application/pdf")}).json()["id"]
+    for _ in range(100):  # só a ingestão: processo revisado não é reextraído sozinho
+        if c.get(f"/api/documents/{new_id}").json()["status"] == "done":
+            break
+        time.sleep(0.1)
+    time.sleep(0.3)
+    p = c.get(f"/api/cases/{case['id']}/processes/{NUM}").json()
+    assert p["estado"] == "desatualizado" and p["result"]["fields"]["valor_garantia"] == "R$ 7,00"  # edição preservada
+    assert len([x for x in llm.calls if "schema" in x]) == n_before  # não gastou LLM sem pedido
+    assert c.post(f"/api/cases/{case['id']}/processes/{NUM}/reextract").status_code == 202
+    for _ in range(100):
+        p = c.get(f"/api/cases/{case['id']}/processes/{NUM}").json()
+        if p["estado"] == "pronto" and p["reviewed"] == 0:
+            break
+        time.sleep(0.1)
+    assert p["result"]["paginas"] == 2 and p["result"]["fields"]["valor_garantia"] == "R$ 2.627.732,00"

@@ -1,4 +1,8 @@
-"""Worker de ingestão: OCR + texto nato-digital + quebra semântica + indexação + extração estruturada."""
+"""Worker: ingestão de cada PDF (OCR, chunking, indexação) e extração estruturada POR PROCESSO.
+
+Um processo pode vir em várias partes (volumes, 'PARTE_2'…). Cada PDF é ingerido isoladamente; quando
+todos os PDFs do caso terminam, cada processo com material novo é extraído uma única vez, juntando as partes."""
+import json
 import logging
 import threading
 from typing import Optional
@@ -6,25 +10,22 @@ from typing import Optional
 from . import extract as ex
 from .config import Settings
 from .db import MetadataDB
-from .llm import get_llm
 from .ingest import citation, entities
 from .ingest.chunker import chunk_page
 from .ingest.pdf import iter_pages, page_count
+from .llm import get_llm
 from .schemas import NAO_ENCONTRADO, SHEETS, resolve_tipo
 from .search.base import SearchStore
 
 log = logging.getLogger("worker")
 CONTEXT_BUDGET = 400_000  # caracteres enviados ao LLM por processo (~100k tokens)
+EXTRACT_PREFIX = "extract:"
 
 
-def _find_classe(db: MetadataDB, doc: dict) -> str:
-    if doc.get("classe"):
-        return doc["classe"]
-    if doc.get("case_id") and doc.get("numero_processo"):
-        for p in db.list_processes(doc["case_id"]):
-            if p["numero"] == doc["numero_processo"]:
-                return (p["mcfly"] or {}).get("classe") or ""
-    return ""
+def pages_path(settings: Settings, doc_id: str):
+    d = settings.data_dir / "pages"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{doc_id}.json"
 
 
 def _resolve_numero(db: MetadataDB, doc: dict, meta: dict) -> Optional[str]:
@@ -41,6 +42,7 @@ def _resolve_numero(db: MetadataDB, doc: dict, meta: dict) -> Optional[str]:
 
 
 def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:
+    """Ingere um PDF. A extração do processo só roda quando o caso não tem mais PDFs na fila."""
     doc = db.get(doc_id)
     if not doc:
         return
@@ -84,17 +86,51 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         meta["rotulos"] = {str(p["page"]): p["label"] for p in pages}
         meta["metodo_por_pagina"] = {"texto": sum(m == "text" for m in methods.values()), "ocr": ocr_pages}
         numero = _resolve_numero(db, doc, meta)
-
-        classe = _find_classe(db, doc) or next(
+        classe = doc.get("classe") or next(
             (c for c in (citation.classe_from_text(p["text"]) for p in pages[:6]) if c), "")
-        sheet_key, prompt = resolve_tipo(doc.get("tipo"), classe)
+        pages_path(settings, doc_id).write_text(json.dumps(pages, ensure_ascii=False), encoding="utf-8")
+        db.update(doc_id, status="done", pages_done=total, pages_ocr=ocr_pages, metadata=meta,
+                  numero_processo=numero, classe=classe, sistema=sistema)
+        if numero:
+            db.mark_stale(doc["case_id"], numero)
+    except Exception as e:  # noqa: BLE001
+        log.exception("falha ao processar %s", doc_id)
+        db.update(doc_id, status="error", error=str(e))
+    finally:
+        extract_ready(doc["case_id"], settings, db, store, llm_client)
+
+
+def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:
+    """Quando não há mais PDFs do caso em andamento, extrai cada processo com material novo (uma vez só)."""
+    if not case_id or db.pending_docs(case_id):
+        return
+    for proc in db.list_processes(case_id):
+        if proc.get("stale") == 1 and not proc.get("reviewed"):  # processo já revisado só reextrai sob pedido
+            extract_process(case_id, proc["numero"], settings, db, store, llm_client)
+
+
+def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataDB, store: SearchStore,
+                    llm_client=None) -> None:
+    if not db.claim_extraction(case_id, numero):
+        return
+    try:
+        docs = db.docs_for_process(case_id, numero)
+        pages: list[dict] = []
+        for d in docs:  # partes na ordem dos autos
+            for p in json.loads(pages_path(settings, d["id"]).read_text(encoding="utf-8")):
+                pages.append({**p, "doc_id": d["id"]})
+        proc = db.get_process(case_id, numero) or {}
+        classe = (proc.get("mcfly") or {}).get("classe") or next((d["classe"] for d in docs if d.get("classe")), "")
+        tipo = proc.get("tipo") or next((d["tipo"] for d in docs if d.get("tipo")), None)
+        sistema = next((d["sistema"] for d in docs if d.get("sistema")), None)
+        sheet_key, prompt = resolve_tipo(tipo, classe)
         sheet = SHEETS[sheet_key]
         result = {"sheet": sheet_key, "prompt": prompt, "fields": {"digitalizado": "SIM"}, "bens": [], "fraudes": [],
-                  "citacoes": {}, "revisar": [], "modo": "sem_llm", "sistema": sistema,
-                  "citacoes_invalidas": []}
+                  "citacoes": {}, "revisar": [], "modo": "sem_llm", "sistema": sistema, "citacoes_invalidas": [],
+                  "documentos": [d["filename"] for d in docs], "paginas": len(pages)}
         llm = llm_client or get_llm(settings)
         if llm is not None:
-            context = ex.select_context(pages, CONTEXT_BUDGET, store, doc_id)
+            context = ex.select_context(pages, CONTEXT_BUDGET, store, [d["id"] for d in docs])
             out = ex.extract_with_llm(sheet, prompt, context, llm, sistema)
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
@@ -105,12 +141,20 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         else:
             result["fields"]["observacoes"] = (
                 f"{NAO_ENCONTRADO}: extração por IA indisponível (nenhuma chave de LLM configurada: GEMINI_API_KEY ou ANTHROPIC_API_KEY).")
-        db.update(doc_id, status="done", pages_done=total, pages_ocr=ocr_pages, metadata=meta,
-                  numero_processo=numero, classe=classe, sheet=sheet_key, sistema=sistema, result=result, reviewed=0)
+        db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema,
+                             reviewed=0, error=None)
     except Exception as e:  # noqa: BLE001
-        log.exception("falha ao processar %s", doc_id)
-        db.update(doc_id, status="error", error=str(e))
+        log.exception("falha na extração de %s", numero)
+        db.finish_extraction(case_id, numero, error=str(e))
+
+
+def handle_job(job: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:
+    if job.startswith(EXTRACT_PREFIX):  # reextração sob pedido: "extract:<case_id>|<numero>"
+        case_id, numero = job[len(EXTRACT_PREFIX):].split("|", 1)
+        extract_process(case_id, numero, settings, db, store, llm_client)
+    else:
+        process_document(job, settings, db, store, llm_client)
 
 
 def run_worker(queue, settings: Settings, db: MetadataDB, store: SearchStore, stop: threading.Event, llm_client=None) -> None:
-    queue.consume(lambda d: process_document(d, settings, db, store, llm_client), stop)
+    queue.consume(lambda j: handle_job(j, settings, db, store, llm_client), stop)

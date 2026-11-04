@@ -37,8 +37,8 @@ class ElasticStore:
     def delete(self, doc_id: str) -> None:
         self.es.delete_by_query(index=self.index_name, query={"term": {"doc_id": doc_id}}, refresh=True)
 
-    def search(self, query: str, doc_id: Optional[str], k: int = 6) -> list[Hit]:
-        flt = [{"term": {"doc_id": doc_id}}] if doc_id else []
+    def search(self, query: str, doc_ids: Optional[list[str]], k: int = 6) -> list[Hit]:
+        flt = [{"terms": {"doc_id": doc_ids}}] if doc_ids else []
         resp = self.es.search(
             index=self.index_name,
             size=k,

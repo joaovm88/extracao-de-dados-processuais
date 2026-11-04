@@ -32,7 +32,7 @@
       <p class="hint">Importe o export do Mcfly: preenche capa, polos, classe, juízo e inscrições, e define o modelo de relatório de cada processo.</p>
       <input type="file" id="mcfly" accept=".xlsx"> <button class="btn" id="mcfly-btn">Importar</button>
       <h2>2. PDFs dos processos</h2>
-      <p class="hint">O nº do processo, o volume e a página inicial são lidos do nome do arquivo (ex.: <code>0341609-70.2005.8.13.0261_V001_001-151-180.pdf</code>).</p>
+      <p class="hint">Pode enviar várias partes do mesmo processo (volumes, <code>PARTE_2</code>): elas viram <b>uma só linha</b> no relatório. O nº do processo, o volume e a página inicial são lidos do nome do arquivo (ex.: <code>0341609-70.2005.8.13.0261_V001_001-151-180.pdf</code>).</p>
       <div class="grid2">
         <div class="field"><label for="tipo">Tipo do processo</label><select id="tipo"><option value="">Automático (pela classe do Mcfly)</option></select></div>
         <div class="field"><label for="sistema">Sistema do processo</label><select id="sistema"><option value="">Automático</option></select></div>
@@ -52,7 +52,8 @@
   </div>
   <section class="card">
     <h2>Processos</h2>
-    <div class="scroll"><table id="procs"><thead><tr><th>Nº do processo</th><th>Classe</th><th>Modelo</th><th>PDF</th><th>Revisão</th><th></th></tr></thead><tbody></tbody></table></div>
+    <div class="scroll"><table id="procs"><thead><tr><th>Nº do processo</th><th>Classe</th><th>Modelo</th><th>PDFs</th><th>Situação</th><th></th></tr></thead><tbody></tbody></table></div>
+    <p class="hint" id="orphans"></p>
   </section>
   <section class="card hidden" id="review">
     <h2>Revisão da extração <small id="rev-title"></small></h2>
