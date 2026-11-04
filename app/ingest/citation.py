@@ -8,7 +8,12 @@ _VOL = re.compile(r"_V(\d+)")
 _RANGE = re.compile(r"(\d+)-(\d+)(?=\.pdf$|$)", re.IGNORECASE)
 
 _ID = re.compile(r"\bNum\.\s*(\d{6,})\s*-\s*P[áa]g\.\s*(\d+)")  # rodapé PJe: ID do documento + página nele
-_EVENTO = re.compile(r"\bEvento\s+(\d{1,4})\b", re.IGNORECASE)  # eproc
+# eproc, PDF completo: rodapé de cada página de ato ("Processo N/TRF6, Evento 14, DESPADEC1, Página 1")
+# e página de separação gerada pelo sistema ("PÁGINA DE SEPARAÇÃO ... Evento 14"). Menções a "evento X"
+# no corpo das peças NÃO contam como marcador.
+_EPROC_FOOT = re.compile(r"Processo\s+\S+?,\s*Evento\s+(\d{1,4}),\s*([A-Za-z0-9_]+),\s*P[áa]gina\s+(\d+)")
+_EPROC_SEP = re.compile(r"P[ÁA]GINA DE SEPARA[ÇC][ÃA]O.{0,120}?\bEvento\s+(\d{1,4})\b", re.DOTALL)
+_CLASSE = re.compile(r"Classe da a[çc][ãa]o:\s*\n?\s*([^\n]+)")
 _ID2 = re.compile(r"\bID[.\s:]*(\d{7,})")
 _EPROC_ID = re.compile(r":: (\d{8,}) - eproc|c[óo]digo verificador (\d{8,})v\d")  # documentos baixados do eproc
 _EVT_FILE = re.compile(r"Evento[_\s-]*0*(\d{1,4})", re.IGNORECASE)
@@ -38,9 +43,17 @@ def page_refs(text: str) -> dict:
         out["id"] = m.group(1) or m.group(2)
     elif m := _ID2.search(text):
         out["id"] = m.group(1)
-    if m := _EVENTO.search(text):
-        out["evento"] = m.group(1)
+    if m := _EPROC_FOOT.search(text):
+        out["evento"], out["tipo_doc"], out["pg"] = m.group(1), m.group(2), m.group(3)
+    elif m := _EPROC_SEP.search(text):
+        out["evento"], out["sep"] = m.group(1), True
     return out
+
+
+def classe_from_text(text: str) -> Optional[str]:
+    """Capa do eproc: 'Classe da ação: Agravo de Instrumento'."""
+    m = _CLASSE.search(text)
+    return m.group(1).strip() if m else None
 
 
 def detect_system(pages_refs: list[dict], texts: list[str]) -> Optional[str]:
@@ -68,6 +81,14 @@ def label(volume: Optional[int], page: int, refs: Optional[dict] = None, sistema
     """eproc: 'Evento N, pg. P' (nunca ID). PJe: 'ID N, pg. P' (nunca Evento). Digitalizado: 'VOL N, pg. P'."""
     refs = refs or {}
     parts = []
+    if sistema == "eproc" and refs.get("evento"):
+        # página DENTRO do ato (rodapé do eproc); páginas de separação não têm pg.
+        parts.append(f"Evento {refs['evento']}")
+        if refs.get("pg"):
+            parts.append(f"pg. {refs['pg']}")
+        elif not refs.get("sep"):
+            parts.append(f"pg. {page}")
+        return ", ".join(parts)
     if sistema != "pje" and refs.get("evento"):
         parts.append(f"Evento {refs['evento']}")
     if sistema == "pje" and refs.get("id"):

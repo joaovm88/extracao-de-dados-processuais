@@ -335,3 +335,45 @@ def test_invented_citation_from_llm_is_flagged_in_result(env):
     llm.payload = {**llm.payload, "observacoes": "Evento 99 - Penhora (pg. 1)"}
     d = _upload(c, tmp, "Evento_28.pdf", [None, None], sistema="eproc")
     assert "Evento 99" in d["result"]["citacoes_invalidas"]
+
+
+def test_eproc_full_process_pdf_separators_footers_and_capa_class(env):
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+
+    c, llm, tmp = env
+    pages = [
+        ["Processos relacionados:", "Nº do processo 1234567-89.2023.8.26.0100", "Classe da ação:", " Agravo de Instrumento",
+         "Competência Tributário/Administrativo"],
+        ["PÁGINA DE SEPARAÇÃO", "(Gerada automaticamente pelo sistema.)", "Evento 14", "Evento:", "Data:",
+         "DESPACHO 03/04/2024 18:44:02", "Complemento: Ref. ao evento 3 do processo originário."],
+        ["Despacho do relator. Determino a penhora do imóvel e a avaliação do bem para o leilão judicial.",
+         "Processo 1234567-89.2023.8.26.0100/TRF6, Evento 14, DESPADEC1, Página 1"],
+        ["Intime-se a parte agravada para manifestação sobre o pedido de redirecionamento da execução.",
+         "Processo 1234567-89.2023.8.26.0100/TRF6, Evento 14, DESPADEC1, Página 2"],
+        ["PÁGINA DE SEPARAÇÃO", "(Gerada automaticamente pelo sistema.)", "Evento 15", "Evento:", "Data:", "PETICAO 05/04/2024"],
+    ]
+    pdf = tmp / "TRF6-123_PARTE_2.PDF"
+    cv = canvas.Canvas(str(pdf), pagesize=A4)
+    for lines in pages:
+        y = 800
+        for ln in lines:
+            cv.drawString(50, y, ln)
+            y -= 20
+        cv.showPage()
+    cv.save()
+    with pdf.open("rb") as f:
+        up = c.post("/api/documents", files={"file": (pdf.name, f, "application/pdf")}).json()
+    d = wait(c, up["id"])
+    assert d["sistema"] == "eproc" and d["classe"] == "Agravo de Instrumento"
+    assert d["result"]["prompt"] == "recursos"  # classe da capa define o prompt sem o analista escolher
+    assert d["numero_processo"] == "1234567-89.2023.8.26.0100"
+    # menção a "evento 3" no corpo da separação não vira marcador; pg. é a página dentro do ato
+    assert d["metadata"]["rotulos"] == {"1": "pg. 1", "2": "Evento 14", "3": "Evento 14, pg. 1",
+                                         "4": "Evento 14, pg. 2", "5": "Evento 15"}
+
+
+def test_citation_with_page_outside_the_act_is_flagged():
+    pages = [{"page": 3, "refs": {"evento": "14", "pg": "1"}}, {"page": 4, "refs": {"evento": "14", "pg": "2"}}]
+    assert ex.check_citations(["Evento 14, pg. 2 - Despacho"], pages, "eproc") == []
+    assert ex.check_citations(["Evento 14, pg. 9 - Despacho"], pages, "eproc") == ["Evento 14, pg. 9"]

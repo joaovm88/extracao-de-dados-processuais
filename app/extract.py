@@ -120,6 +120,7 @@ def get_sheet(key: str) -> Sheet:
     return SHEETS[key]
 
 
+_PAIR = re.compile(r"\b(Evento|ID)[\s.:]*(\d+)\s*,\s*(?:VOL\s*\d+\s*,\s*)?p[áa]?g\.?\s*(\d+)", re.IGNORECASE)
 _CIT = re.compile(r"\b(Evento|ID|pg\.?|p[áa]g(?:ina)?\.?)[\s.:]*(\d+(?:\s*[/\-]\s*\d+)*)", re.IGNORECASE)
 
 
@@ -129,9 +130,21 @@ def check_citations(texts: list[str], pages: list[dict], sistema) -> list[str]:
     eventos = {str(p["refs"]["evento"]) for p in pages if p["refs"].get("evento")}
     ids = {str(p["refs"]["id"]) for p in pages if p["refs"].get("id")}
     pgs = {str(p["page"]) for p in pages} | {str(p["refs"]["pg"]) for p in pages if p["refs"].get("pg")}
+    pairs: dict[tuple[str, str], set] = {}
+    for p in pages:
+        r = p["refs"]
+        for kind, key in (("evento", "evento"), ("id", "id")):
+            if r.get(key):
+                pairs.setdefault((kind, str(r[key])), set()).add(str(r.get("pg") or p["page"]))
     bad: list[str] = []
     for t in texts:
-        for m in _CIT.finditer(t or ""):
+        for m in _PAIR.finditer(t or ""):  # "Evento 14, pg. 7": a página tem de existir DENTRO desse ato
+            kind, n, pg = m.group(1).lower(), m.group(2).lstrip("0") or "0", m.group(3).lstrip("0") or "0"
+            known = pairs.get((kind, n))
+            if known is not None and pg not in known and not (sistema == "eproc" and kind == "id"):
+                bad.append(f"{m.group(1)} {m.group(2)}, pg. {m.group(3)}")
+        t = _PAIR.sub(lambda m: f"{m.group(1)} {m.group(2)}", t or "")  # a página do par já foi conferida acima
+        for m in _CIT.finditer(t):
             kind = m.group(1).lower()
             nums = [n.lstrip("0") or "0" for n in re.findall(r"\d+", m.group(2).split("-")[0].replace("/", " "))]
             if kind == "evento":

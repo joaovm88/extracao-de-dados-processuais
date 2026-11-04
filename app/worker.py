@@ -85,7 +85,8 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         meta["metodo_por_pagina"] = {"texto": sum(m == "text" for m in methods.values()), "ocr": ocr_pages}
         numero = _resolve_numero(db, doc, meta)
 
-        classe = _find_classe(db, doc)
+        classe = _find_classe(db, doc) or next(
+            (c for c in (citation.classe_from_text(p["text"]) for p in pages[:6]) if c), "")
         sheet_key, prompt = resolve_tipo(doc.get("tipo"), classe)
         sheet = SHEETS[sheet_key]
         result = {"sheet": sheet_key, "prompt": prompt, "fields": {"digitalizado": "SIM"}, "bens": [], "fraudes": [],

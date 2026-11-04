@@ -31,6 +31,8 @@ Front-end (casos, upload, revisão, chat) → API (FastAPI) → Fila (Redis) →
 - **eproc** cita `Evento N, pg. P`; **PJe** cita `ID N, pg. P` (ID do documento e página *dentro* dele, lida do rodapé `Num. X - Pág. N`). O sistema é detectado pelos marcadores do PDF ou informado no envio.
 - Os rótulos são calculados pelo código a partir do PDF, não pelo modelo: o LLM só copia o rótulo de cada trecho, e o prompt proíbe o formato do outro sistema.
 - Depois da extração, toda citação do texto (Evento, ID, pg.) é conferida com o PDF. Citação inexistente, ou `ID` em processo eproc / `Evento` em PJe, aparece em vermelho na tela de revisão.
+- **eproc, PDF completo** (validado com um PDF real do TRF6): o ato vem de `PÁGINA DE SEPARAÇÃO … Evento N` e do rodapé `Processo …/TRF6, Evento 14, DESPADEC1, Página 1`; `pg.` é a página **dentro do ato** (não a do PDF). A classe vem da capa (`Classe da ação:`), então o prompt certo é escolhido mesmo sem o Mcfly. Menções a "evento X" no corpo das peças não viram marcador.
+- `Evento N, pg. P` é conferido como par: a página P tem de existir dentro do ato N.
 - Páginas sem marcador herdam o ato anterior.
 
 ## Pontos importantes
