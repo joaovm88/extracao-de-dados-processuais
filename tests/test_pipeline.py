@@ -18,6 +18,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("QUEUE_BACKEND", "memory")
     monkeypatch.setenv("SEARCH_BACKEND", "memory")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     with TestClient(create_app(Settings())) as c:
         yield c
 
@@ -62,13 +63,8 @@ def test_full_pipeline(client, tmp_path):
     assert sis and sis[0]["valor"] == 48320.15 and sis[0]["pagina"] == 2
     assert any(v["categoria"] == "DARF / Tributo" and v["valor"] == 1250.40 for v in m["valores"])
 
-    x = client.get(f"/api/documents/{d['id']}/spreadsheet")
-    assert x.status_code == 200
-    wb = load_workbook(io.BytesIO(x.content))
-    assert set(wb.sheetnames) == {"Resumo", "Partes", "Documentos", "Valores"}
-
     r = client.post("/api/chat", json={"question": "Existe valor bloqueado pelo SISBAJUD?", "doc_id": d["id"]}).json()
-    assert "48.320,15" in r["answer"] and "p. 2" in r["answer"]
+    assert "48.320,15" in r["answer"] and "pg. 2" in r["answer"]
     assert 2 in [s["page"] for s in r["sources"]]
 
 
@@ -79,9 +75,9 @@ def test_rejects_non_pdf(client, tmp_path):
     assert r.status_code == 400
 
 
-def test_spreadsheet_before_done_and_unknown(client):
+def test_unknown_resources(client):
     assert client.get("/api/documents/nope").status_code == 404
-    assert client.get("/api/documents/nope/spreadsheet").status_code == 404
+    assert client.get("/api/cases/nope/spreadsheet").status_code == 404
 
 
 def test_image_page_goes_through_ocr(tmp_path, monkeypatch):

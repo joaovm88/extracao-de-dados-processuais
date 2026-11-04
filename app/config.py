@@ -10,6 +10,10 @@ class Settings:
         self.search_backend = env("SEARCH_BACKEND", "memory")
         self.es_url = env("ELASTICSEARCH_URL", "http://localhost:9200")
         self.es_index = env("ES_INDEX", "processos_chunks")
+        # LLM: "auto" escolhe Gemini (Google AI Studio) se houver chave, senão Anthropic, senão nenhum
+        self.llm_provider = env("LLM_PROVIDER", "auto").lower()
+        self.gemini_api_key = env("GEMINI_API_KEY", "") or env("GOOGLE_API_KEY", "")
+        self.gemini_model = env("GEMINI_MODEL", "gemini-2.5-pro")
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")
         self.llm_model = env("LLM_MODEL", "claude-sonnet-5-5")
         self.ocr_lang = env("OCR_LANG", "por")
