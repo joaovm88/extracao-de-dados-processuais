@@ -5,7 +5,7 @@ Plataforma RAG com processamento assíncrono que preenche a **planilha de relat�
 ```
 Front-end (casos, upload, revisão, chat) → API (FastAPI) → Fila (Redis) → Worker
    OCR + texto nato-digital + quebra semântica → Elasticsearch (lexical + vetorial) + metadados
-   → extração estruturada por LLM (prompts versionados em prompts/) → revisão humana → .xlsx no layout do modelo
+   → extração estruturada por LLM — Google Gemini (AI Studio) ou Anthropic (prompts versionados em prompts/) → revisão humana → .xlsx no layout do modelo
 ```
 
 ## Fluxo de trabalho
@@ -30,13 +30,15 @@ Front-end (casos, upload, revisão, chat) → API (FastAPI) → Fila (Redis) →
 ## Pontos importantes
 - **PDFs digitalizados antigos** trazem uma camada de texto embutida corrompida (letras cirílicas, "R$5.000.00"). O sistema detecta isso (`app/ingest/quality.py`) e refaz o OCR da imagem com Tesseract. **Sem Tesseract** o texto é só parcialmente reparado e as páginas são sinalizadas: use a imagem Docker (já inclui `tesseract-ocr-por`).
 - Processos grandes: acima de ~400 mil caracteres, só os trechos mais relevantes (busca híbrida por campo) mais as páginas finais vão ao LLM.
-- Sem `ANTHROPIC_API_KEY` o sistema ingere e indexa, mas a extração fica "indisponível" (nunca inventa).
+- **LLM (`app/llm.py`)**: `LLM_PROVIDER=auto` usa **Google Gemini** se houver `GEMINI_API_KEY` (chave do Google AI Studio), senão Anthropic. A extração usa saída JSON restrita ao schema da aba (`response_json_schema`); se a API recusar o schema, cai para JSON livre e a validação local (listas fechadas) continua valendo. O modelo é configurável em `GEMINI_MODEL`. Sem nenhuma chave o sistema ingere e indexa, mas a extração fica "indisponível" (nunca inventa).
+- **Confidencialidade (LGPD/sigilo):** não use a camada gratuita do AI Studio com processos reais. Confirme nos termos da parceria que a camada paga/Vertex AI **não usa os dados para treinar** e que o tratamento é permitido.
+- **PDFs do eproc** (um evento por arquivo): o nº do evento vem do nome (`Evento_14.pdf`), o ID do rodapé (`:: 60000006508 - eproc - ::`) ou do código verificador, e o nº do processo do texto (priorizando os do Mcfly do caso). Citação: `Evento 14, pg. 1, ID 60000006508`.
 - O front segue a identidade visual do gov.br (cores, tipografia, componentes) em CSS próprio, sem usar brasão/marcas oficiais.
 
 ## Execução
 Produção (Redis + Elasticsearch + 2 workers + Tesseract):
 ```bash
-ANTHROPIC_API_KEY=sk-... docker compose up --build
+GEMINI_API_KEY=... docker compose up --build
 ```
 Acesse http://localhost:8000. Desenvolvimento local (fila e busca em memória):
 ```bash

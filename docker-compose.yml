@@ -4,6 +4,9 @@ x-env: &env
   REDIS_URL: redis://redis:6379/0
   SEARCH_BACKEND: elasticsearch
   ELASTICSEARCH_URL: http://elasticsearch:9200
+  LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-pro}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   DATA_DIR: /data
 services:

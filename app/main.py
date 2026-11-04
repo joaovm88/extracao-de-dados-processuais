@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from . import rag
 from .config import Settings
 from .export import build_case_xlsx
+from .llm import get_llm
 from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
 from .schemas import SHEETS
@@ -42,12 +43,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     s = settings or Settings()
     db, store, queue = make_db(s), make_store(s), make_queue(s)
     stop = threading.Event()
+    llm = llm_client or get_llm(s)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         # Fila em memória: worker na mesma aplicação. Com Redis, rode `python -m app.run_worker`.
         if s.queue_backend == "memory":
-            threading.Thread(target=run_worker, args=(queue, s, db, store, stop, llm_client), daemon=True).start()
+            threading.Thread(target=run_worker, args=(queue, s, db, store, stop, llm), daemon=True).start()
         yield
         stop.set()
 
@@ -56,7 +58,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": bool(s.anthropic_api_key)}
+        return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": llm.name if llm else None}
 
     # ---- casos (devedor)
     @app.post("/api/cases", status_code=201)
@@ -104,7 +106,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     # ---- documentos
     @app.post("/api/documents", status_code=202)
     async def upload(file: UploadFile = File(...), case_id: Optional[str] = Form(None),
-                     volume: Optional[int] = Form(None), pagina_inicial: Optional[int] = Form(None)):
+                     volume: Optional[int] = Form(None), pagina_inicial: Optional[int] = Form(None),
+                     numero_processo: Optional[str] = Form(None)):
         if not (file.filename or "").lower().endswith(".pdf"):
             raise HTTPException(400, "Envie um arquivo PDF.")
         if case_id:
@@ -127,8 +130,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(400, "Arquivo não é um PDF válido.")
         info = parse_filename(Path(file.filename).name)  # nº CNJ, volume e página inicial vêm do nome do arquivo
         db.create(doc_id, Path(file.filename).name, str(dest), case_id,
-                  numero_processo=info["numero_processo"],
-                  volume=volume if volume is not None else info["volume"],
+                  numero_processo=numero_processo or info["numero_processo"],
+                  volume=volume if volume is not None else info["volume"], evento=info["evento"],
                   page_start=pagina_inicial or info["pagina_inicial"] or 1)
         queue.enqueue(doc_id)
         return {"id": doc_id, "status": "queued", **info}
@@ -175,7 +178,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                 raise HTTPException(404, "Documento não encontrado.")
             if d["status"] != "done":
                 raise HTTPException(409, "O documento ainda está sendo processado.")
-        return rag.answer(body.question, body.doc_id, s, db, store)
+        return rag.answer(body.question, body.doc_id, s, db, store, llm)
 
     static = Path(__file__).resolve().parent.parent / "static"
     app.mount("/", StaticFiles(directory=static, html=True), name="static")

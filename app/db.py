@@ -24,7 +24,7 @@ class MetadataDB:
                     UNIQUE(case_id, numero));
                 CREATE TABLE IF NOT EXISTS documents (
                     id TEXT PRIMARY KEY, case_id TEXT, filename TEXT NOT NULL, path TEXT NOT NULL,
-                    status TEXT NOT NULL, numero_processo TEXT, volume INTEGER, page_start INTEGER DEFAULT 1,
+                    status TEXT NOT NULL, numero_processo TEXT, volume INTEGER, evento TEXT, page_start INTEGER DEFAULT 1,
                     classe TEXT, sheet TEXT, pages_total INTEGER DEFAULT 0, pages_done INTEGER DEFAULT 0,
                     pages_ocr INTEGER DEFAULT 0, error TEXT, metadata TEXT, result TEXT,
                     reviewed INTEGER DEFAULT 0, created_at REAL, updated_at REAL);

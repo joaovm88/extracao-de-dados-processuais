@@ -2,6 +2,7 @@
 from typing import Optional
 
 from .config import Settings
+from .llm import LLMProvider, get_llm
 from .db import MetadataDB
 from .ingest.entities import fmt_brl, norm
 from .ingest.citation import label
@@ -48,25 +49,19 @@ def _extractive_answer(question: str, hits: list[Hit], hint_doc: Optional[dict])
     return "\n".join(parts)
 
 
-def answer(question: str, doc_id: Optional[str], settings: Settings, db: MetadataDB, store: SearchStore) -> dict:
+def answer(question: str, doc_id: Optional[str], settings: Settings, db: MetadataDB, store: SearchStore,
+           llm: Optional[LLMProvider] = None) -> dict:
     hits = store.search(question, doc_id, 6)
     doc = db.get(doc_id) if doc_id else None
     sources = [{"doc_id": h.doc_id, "page": h.page, "rotulo": _lab(doc, h.page), "snippet": " ".join(h.text.split())[:300]} for h in hits]
     if not hits:
         return {"answer": "Não encontrei essa informação no(s) documento(s) analisado(s).", "sources": [], "mode": "none"}
 
-    if not settings.anthropic_api_key:
+    llm = llm or get_llm(settings)
+    if llm is None:
         return {"answer": _extractive_answer(question, hits, doc), "sources": sources, "mode": "extractive"}
-
-    import anthropic
 
     ctx = "\n\n".join(f"[{_lab(doc, h.page)}] {h.text}" for h in hits)
     hint = _structured_hint(question, doc)
-    prompt = f"Trechos do processo:\n{ctx}\n\n{hint}\n\nPergunta: {question}"
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
-    msg = client.messages.create(
-        model=settings.llm_model, max_tokens=800, system=SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-    return {"answer": text, "sources": sources, "mode": "llm"}
+    text = llm.generate(SYSTEM, f"Trechos do processo:\n{ctx}\n\n{hint}\n\nPergunta: {question}", 800)
+    return {"answer": text, "sources": sources, "mode": "llm", "provedor": llm.name}

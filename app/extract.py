@@ -2,7 +2,6 @@
 from pathlib import Path
 from typing import Any, Optional
 
-from .config import Settings
 from .schemas import NAO_ENCONTRADO, SHEETS, Sheet
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -39,10 +38,10 @@ def tool_schema(sheet: Sheet) -> dict:
     props["fraudes"] = {"type": "array", "description": "Somente quando o procurador alegou fraude E o juiz deferiu/analisou o pedido.",
                         "items": {"type": "object", "properties": {k: {"type": ["string", "null"]} for k in (
                             "tipo", "analise", "valor_causa")}}}
-    props["citacoes"] = {"type": "object", "description": "Para cada campo preenchido, a citação de onde veio (ex.: 'VOL 001, pg. 160').",
-                         "additionalProperties": {"type": "string"}}
-    return {"name": "registrar_extracao", "description": "Registra os dados extraídos do processo.",
-            "input_schema": {"type": "object", "properties": props, "required": ["observacoes"]}}
+    props["citacoes"] = {"type": "array", "description": "Para cada campo preenchido, a citação de onde veio (ex.: 'Evento 14, pg. 1, ID 6000006508').",
+                         "items": {"type": "object", "properties": {"campo": {"type": "string"}, "citacao": {"type": "string"}},
+                                   "required": ["campo", "citacao"]}}
+    return {"type": "object", "properties": props, "required": ["observacoes"]}
 
 
 def select_context(pages: list[dict], budget: int, store=None, doc_id: Optional[str] = None) -> str:
@@ -75,29 +74,17 @@ def select_context(pages: list[dict], budget: int, store=None, doc_id: Optional[
     return "\n\n".join(out)
 
 
-def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, settings: Settings, client=None) -> dict:
-    """Chama o LLM com tool-use forçado (saída JSON validada pelo schema)."""
-    if client is None:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm) -> dict:
+    """Chama o LLM (Gemini ou Anthropic) com saída JSON restrita ao schema da aba."""
     system = (
         load_prompt(prompt_name)
         + "\n\n---\nREGRAS DE SAÍDA ESTRUTURADA:\n"
-        f"- Preencha a ferramenta registrar_extracao. 'observacoes' recebe o relatório no formato do prompt acima.\n"
-        f"- Cada trecho do processo vem rotulado como [Evento N, VOL N, pg. N, ID N]; use EXATAMENTE esses rótulos nas citações.\n"
-        f"- Campos de lista fechada só aceitam os valores permitidos; se não houver base nos autos, use null.\n"
+        "- Devolva os campos pedidos no schema. 'observacoes' recebe o relatório no formato do prompt acima.\n"
+        "- Cada trecho do processo vem rotulado como [Evento N, VOL N, pg. N, ID N]; use EXATAMENTE esses rótulos nas citações.\n"
+        "- Campos de lista fechada só aceitam os valores permitidos; se não houver base nos autos, use null.\n"
         f"- Nunca invente. Sem base no texto, use null (ou '{NAO_ENCONTRADO}' dentro de 'observacoes')."
     )
-    msg = client.messages.create(
-        model=settings.llm_model, max_tokens=8000, system=system,
-        tools=[tool_schema(sheet)], tool_choice={"type": "tool", "name": "registrar_extracao"},
-        messages=[{"role": "user", "content": f"Processo para análise:\n\n{context}"}],
-    )
-    for b in msg.content:
-        if getattr(b, "type", "") == "tool_use":
-            return validate(sheet, dict(b.input))
-    raise RuntimeError("O modelo não devolveu a extração estruturada.")
+    return validate(sheet, llm.extract(system, f"Processo para análise:\n\n{context}", tool_schema(sheet)))
 
 
 def validate(sheet: Sheet, data: dict) -> dict:
@@ -109,9 +96,11 @@ def validate(sheet: Sheet, data: dict) -> dict:
             review.append(f.key)
             data[f.key] = None
     data["_revisar"] = review
-    data.setdefault("bens", [])
-    data.setdefault("fraudes", [])
-    data.setdefault("citacoes", {})
+    data["bens"] = data.get("bens") or []
+    data["fraudes"] = data.get("fraudes") or []
+    cit = data.get("citacoes") or []
+    data["citacoes"] = ({c["campo"]: c["citacao"] for c in cit if isinstance(c, dict) and "campo" in c and "citacao" in c}
+                        if isinstance(cit, list) else dict(cit))
     return data
 
 

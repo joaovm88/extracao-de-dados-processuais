@@ -18,6 +18,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("QUEUE_BACKEND", "memory")
     monkeypatch.setenv("SEARCH_BACKEND", "memory")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     with TestClient(create_app(Settings())) as c:
         yield c
 

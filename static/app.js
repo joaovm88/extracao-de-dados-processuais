@@ -74,5 +74,5 @@ $('chat').onsubmit = async e => {
     add('', esc(j.answer) + (j.sources.length ? `<div class="src">Fontes: ${[...new Set(j.sources.map(s => s.rotulo))].map(esc).join(' · ')}</div>` : '')); }
   catch (err) { add('', esc(err.message)); }
 };
-api('/api/health').then(h => $('llm').textContent = h.llm ? 'IA ativa' : 'IA desativada (sem chave)').catch(() => {});
+api('/api/health').then(h => $('llm').textContent = h.llm ? 'IA ativa: ' + h.llm : 'IA desativada (sem chave)').catch(() => {});
 loadCases();
