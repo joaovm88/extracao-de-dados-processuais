@@ -75,6 +75,8 @@ docker compose run --rm --no-deps api python -c "import os; from google import g
 ```
 Use um nome da lista sem o prefixo `models/`. Modelos "preview" têm limites menores no nível gratuito.
 
+**Nível gratuito: modelos Pro têm cota zero.** Em https://aistudio.google.com/rate-limit cada modelo mostra RPM / TPM / RPD. Um modelo com `0 / 0 / 0` (ex.: Gemini 3.1 Pro, 2.5 Pro) recusa qualquer pedido com 429. Use um **Flash ou Flash-Lite** com cota maior que zero. Cada extração é **1 pedido** (RPD) e ~25 a 100 mil tokens de entrada (TPM).
+
 **Erro 429 / "Limite de uso do Gemini atingido"** (comum no nível gratuito com processos de centenas de páginas):
 1. Use um modelo "flash" da lista (limites maiores).
 2. Reduza o texto enviado por processo com `CONTEXT_BUDGET_CHARS` no `.env` (4 caracteres ≈ 1 token; `100000` ≈ 25 mil tokens). O sistema então manda só os trechos mais relevantes e as páginas finais; confira o resultado na revisão.
