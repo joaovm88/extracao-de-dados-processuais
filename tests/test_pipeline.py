@@ -99,3 +99,12 @@ def test_image_page_without_tesseract_is_flagged(tmp_path, monkeypatch):
     p = tmp_path / "a.pdf"
     make_pdf(p)
     assert list(pdf.iter_pages(str(p), Settings()))[3].method == "ocr_unavailable"
+
+
+def test_unexpected_error_returns_readable_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    app = create_app(Settings())
+    monkeypatch.setattr(app.state.db, "create", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("banco indisponível")))
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post("/api/documents", files={"file": ("x.pdf", b"%PDF-1.4", "application/pdf")})
+    assert r.status_code == 500 and "banco indisponível" in r.json()["detail"]

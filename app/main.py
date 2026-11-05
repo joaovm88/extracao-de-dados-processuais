@@ -1,3 +1,4 @@
+import logging
 import threading
 import uuid
 from contextlib import asynccontextmanager
@@ -5,7 +6,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -57,6 +58,12 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     app = FastAPI(title="Análise e Ingestão de Processos Judiciais", lifespan=lifespan)
     app.state.queue, app.state.db, app.state.store = queue, db, store
+
+    @app.exception_handler(Exception)
+    async def unhandled(request, exc: Exception):
+        """Erro inesperado: registra no log e devolve JSON legível (a tela mostra a causa, não só 'Erro')."""
+        logging.getLogger("api").exception("Erro em %s %s", request.method, request.url.path)
+        return JSONResponse(status_code=500, content={"detail": f"Erro interno ({type(exc).__name__}): {exc}"})
 
     @app.get("/api/health")
     def health():

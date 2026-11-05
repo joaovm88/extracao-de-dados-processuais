@@ -1,7 +1,15 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let caseId = null, selProc = null, timer = null;
-const api = async (url, opt) => { const r = await fetch(url, opt); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || 'Erro'); return j; };
+const api = async (url, opt) => {
+  const r = await fetch(url, opt); let j = {};
+  try { j = await r.json(); } catch (_) { /* resposta sem JSON */ }
+  if (!r.ok) {
+    const d = j.detail;
+    throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg).join('; ') : `Falha HTTP ${r.status}`);
+  }
+  return j;
+};
 const json = (m, b) => ({ method: m, headers: {'Content-Type': 'application/json'}, body: JSON.stringify(b) });
 
 async function loadCases() {
