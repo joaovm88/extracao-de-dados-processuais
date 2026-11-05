@@ -137,3 +137,36 @@ def test_old_database_schema_is_migrated(tmp_path):
     assert db.get("velho")["status"] == "done"  # dados antigos preservados
     db.mark_stale(case["id"], "1")  # tabela processes também migrada
     assert db.get_process(case["id"], "1")["stale"] == 1
+
+
+def test_stuck_documents_are_recovered_on_startup_and_can_be_retried(tmp_path, monkeypatch):
+    """Docker parado no meio do processamento deixava PDFs 'processing' para sempre e o caso nunca era extraído."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("QUEUE_BACKEND", "memory")
+    monkeypatch.setenv("SEARCH_BACKEND", "memory")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    s = Settings()
+    app = create_app(s)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    app.state.db.create("preso", "x.pdf", str(pdf), case["id"], numero_processo="1234567-89.2023.8.26.0100")
+    app.state.db.update("preso", status="processing")  # worker morreu aqui
+    with TestClient(app) as c:
+        for _ in range(100):
+            d = c.get("/api/documents/preso").json()
+            if d["status"] == "done":
+                break
+            time.sleep(0.1)
+        assert d["status"] == "done"
+        # reprocessar manualmente um PDF com erro
+        app.state.db.update("preso", status="error", error="falha antiga")
+        assert c.post("/api/documents/preso/retry").status_code == 202
+        for _ in range(100):
+            d = c.get("/api/documents/preso").json()
+            if d["status"] == "done":
+                break
+            time.sleep(0.1)
+        assert d["status"] == "done" and d["error"] is None
+        assert c.post("/api/documents/nope/retry").status_code == 404

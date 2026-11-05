@@ -1,5 +1,6 @@
 import logging
 import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -48,8 +49,20 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     stop = threading.Event()
     llm = llm_client or get_llm(s)
 
+    def recover_stuck_docs() -> None:
+        """PDFs que ficaram 'queued/processing' porque o Docker foi parado no meio voltam para a fila.
+        Fila em memória: tudo pendente é órfão (o worker reinicia junto). Redis: só 'processing' parado há >10 min."""
+        now = time.time()
+        for d in db.list():
+            orphan = (d["status"] in ("queued", "processing") and s.queue_backend == "memory") or \
+                     (d["status"] == "processing" and now - (d["updated_at"] or 0) > 600)
+            if orphan:
+                db.update(d["id"], status="queued", error=None)
+                queue.enqueue(d["id"])
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        recover_stuck_docs()
         # Fila em memória: worker na mesma aplicação. Com Redis, rode `python -m app.run_worker`.
         if s.queue_backend == "memory":
             threading.Thread(target=run_worker, args=(queue, s, db, store, stop, llm), daemon=True).start()
@@ -218,6 +231,16 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     @app.get("/api/documents")
     def list_docs(case_id: Optional[str] = None):
         return [{k: v for k, v in d.items() if k not in ("metadata", "result")} for d in db.list(case_id)]
+
+    @app.post("/api/documents/{doc_id}/retry", status_code=202)
+    def retry(doc_id: str):
+        """Reprocessa um PDF que deu erro ou travou."""
+        d = db.get(doc_id)
+        if not d:
+            raise HTTPException(404, "Documento não encontrado.")
+        db.update(doc_id, status="queued", error=None, pages_done=0, pages_ocr=0)
+        queue.enqueue(doc_id)
+        return {"status": "queued"}
 
     @app.get("/api/documents/{doc_id}")
     def get_doc(doc_id: str):

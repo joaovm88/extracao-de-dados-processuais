@@ -50,6 +50,15 @@ async function refreshCase() {
   $('procs').tBodies[0].innerHTML = rows.join('') || '<tr><td colspan="6">Importe o Mcfly e envie os PDFs.</td></tr>';
   $('orphans').textContent = avulsos.length ? `${avulsos.length} PDF(s) sem nº de processo identificado: ${avulsos.map(d => d.filename).join(', ')}` : '';
   document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => selectProc(b.dataset.open));
+  const DST = {queued: ['warn', 'na fila'], processing: ['warn', 'processando'], done: ['ok', 'lido'], error: ['err', 'erro']};
+  $('docs').tBodies[0].innerHTML = c.documentos.map(d => {
+    const [cls, txt] = DST[d.status] || ['', d.status];
+    return `<tr><td>${esc(d.filename)}</td><td><span class="tag ${cls}">${txt}</span></td>
+      <td>${d.pages_done}/${d.pages_total}${d.pages_ocr ? ` (${d.pages_ocr} por OCR)` : ''}</td>
+      <td>${esc(d.error || (d.numero_processo ? 'Processo ' + d.numero_processo : 'nº do processo não identificado'))}</td>
+      <td>${['error', 'processing', 'queued'].includes(d.status) ? `<button class="btn" data-retry="${d.id}">Reprocessar</button>` : ''}</td></tr>`;
+  }).join('') || '<tr><td colspan="5">Nenhum PDF enviado.</td></tr>';
+  document.querySelectorAll('[data-retry]').forEach(b => b.onclick = async () => { await api(`/api/documents/${b.dataset.retry}/retry`, {method: 'POST'}); refreshCase(); });
 }
 async function selectProc(numero) {
   selProc = numero; const p = await api(`/api/cases/${caseId}/processes/${encodeURIComponent(numero)}`);
