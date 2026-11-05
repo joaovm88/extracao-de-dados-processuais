@@ -26,9 +26,9 @@ class MemoryStore:
         with self._lock:
             self._rows = [r for r in self._rows if r["doc_id"] != doc_id]
 
-    def search(self, query: str, doc_id: Optional[str], k: int = 6) -> list[Hit]:
+    def search(self, query: str, doc_ids: Optional[list[str]], k: int = 6) -> list[Hit]:
         with self._lock:
-            rows = [r for r in self._rows if doc_id is None or r["doc_id"] == doc_id]
+            rows = [r for r in self._rows if doc_ids is None or r["doc_id"] in doc_ids]
         if not rows:
             return []
         q = tokenize(query)

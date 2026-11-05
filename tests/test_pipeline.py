@@ -99,3 +99,129 @@ def test_image_page_without_tesseract_is_flagged(tmp_path, monkeypatch):
     p = tmp_path / "a.pdf"
     make_pdf(p)
     assert list(pdf.iter_pages(str(p), Settings()))[3].method == "ocr_unavailable"
+
+
+def test_unexpected_error_returns_readable_json(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    app = create_app(Settings())
+    monkeypatch.setattr(app.state.db, "create", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("banco indisponível")))
+    with TestClient(app, raise_server_exceptions=False) as c:
+        r = c.post("/api/documents", files={"file": ("x.pdf", b"%PDF-1.4", "application/pdf")})
+    assert r.status_code == 500 and "banco indisponível" in r.json()["detail"]
+
+
+def test_old_database_schema_is_migrated(tmp_path):
+    """Banco criado por versão antiga (sem tipo/sistema/evento…) não pode quebrar o envio de PDFs."""
+    import sqlite3
+
+    from app.db import MetadataDB
+
+    path = tmp_path / "old.sqlite3"
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE documents (id TEXT PRIMARY KEY, filename TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL,
+                                pages_total INTEGER DEFAULT 0, pages_done INTEGER DEFAULT 0, pages_ocr INTEGER DEFAULT 0,
+                                error TEXT, metadata TEXT, created_at REAL, updated_at REAL);
+        CREATE TABLE processes (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, numero TEXT NOT NULL, mcfly TEXT,
+                                UNIQUE(case_id, numero));
+        INSERT INTO documents (id, filename, path, status) VALUES ('velho', 'a.pdf', '/x', 'done');
+    """)
+    con.commit()
+    con.close()
+    db = MetadataDB(path)
+    case = db.create_case("c")
+    db.create("novo", "b.pdf", "/y", case["id"], tipo="execucao_fiscal", sistema="eproc", parte=2, evento="14",
+              numero_processo="1", volume=1, page_start=3)
+    d = db.get("novo")
+    assert (d["tipo"], d["sistema"], d["parte"], d["evento"]) == ("execucao_fiscal", "eproc", 2, "14")
+    assert db.get("velho")["status"] == "done"  # dados antigos preservados
+    db.mark_stale(case["id"], "1")  # tabela processes também migrada
+    assert db.get_process(case["id"], "1")["stale"] == 1
+
+
+def test_stuck_documents_are_recovered_on_startup_and_can_be_retried(tmp_path, monkeypatch):
+    """Docker parado no meio do processamento deixava PDFs 'processing' para sempre e o caso nunca era extraído."""
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("QUEUE_BACKEND", "memory")
+    monkeypatch.setenv("SEARCH_BACKEND", "memory")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    s = Settings()
+    app = create_app(s)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    app.state.db.create("preso", "x.pdf", str(pdf), case["id"], numero_processo="1234567-89.2023.8.26.0100")
+    app.state.db.update("preso", status="processing")  # worker morreu aqui
+    with TestClient(app) as c:
+        for _ in range(100):
+            d = c.get("/api/documents/preso").json()
+            if d["status"] == "done":
+                break
+            time.sleep(0.1)
+        assert d["status"] == "done"
+        # reprocessar manualmente um PDF com erro
+        app.state.db.update("preso", status="error", error="falha antiga")
+        assert c.post("/api/documents/preso/retry").status_code == 202
+        for _ in range(100):
+            d = c.get("/api/documents/preso").json()
+            if d["status"] == "done":
+                break
+            time.sleep(0.1)
+        assert d["status"] == "done" and d["error"] is None
+        assert c.post("/api/documents/nope/retry").status_code == 404
+
+
+def _env_app(tmp_path, monkeypatch, llm=None):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("QUEUE_BACKEND", "memory")
+    monkeypatch.setenv("SEARCH_BACKEND", "memory")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    return create_app(Settings(), llm_client=llm)
+
+
+def test_deleting_a_stuck_pdf_unblocks_the_case_and_triggers_extraction(tmp_path, monkeypatch):
+    app = _env_app(tmp_path, monkeypatch)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    # PDF "na fila" órfão (resto de upload que falhou) bloqueava o caso
+    app.state.db.create("orfao", "x.pdf", str(pdf), case["id"])
+    with TestClient(app) as c:
+        app.state.db.update("orfao", status="queued")
+        with pdf.open("rb") as f:
+            up = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("y.pdf", f, "application/pdf")}).json()
+        for _ in range(100):
+            if c.get(f"/api/documents/{up['id']}").json()["status"] == "done":
+                break
+            time.sleep(0.1)
+        time.sleep(0.3)
+        num = c.get(f"/api/documents/{up['id']}").json()["numero_processo"]
+        assert c.get(f"/api/cases/{case['id']}/processes/{num}").json()["estado"] in ("aguardando", "pronto")
+        assert c.delete("/api/documents/orfao").status_code == 202
+        for _ in range(100):
+            p = c.get(f"/api/cases/{case['id']}/processes/{num}").json()
+            if p["estado"] == "pronto":
+                break
+            time.sleep(0.1)
+        assert p["estado"] == "pronto" and p["result"]["modo"] == "sem_llm"
+        assert c.delete("/api/documents/nope").status_code == 404
+
+
+def test_failed_upload_leaves_no_orphan_row_and_same_content_is_not_duplicated(tmp_path, monkeypatch):
+    app = _env_app(tmp_path, monkeypatch)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app, raise_server_exceptions=False) as c:
+        original = app.state.queue.enqueue
+        app.state.queue.enqueue = lambda *a: (_ for _ in ()).throw(RuntimeError("redis fora"))
+        with pdf.open("rb") as f:
+            r = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("a.pdf", f, "application/pdf")})
+        assert r.status_code == 500 and app.state.db.list(case["id"]) == []  # sem registro órfão
+        app.state.queue.enqueue = original
+        for nome in ("a.pdf", "a_compressed.pdf"):  # mesmo conteúdo, nomes diferentes
+            with pdf.open("rb") as f:
+                assert c.post("/api/documents", data={"case_id": case["id"]}, files={"file": (nome, f, "application/pdf")}).status_code == 202
+        assert len(app.state.db.list(case["id"])) == 1

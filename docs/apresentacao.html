@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Plano Executivo: Sistema de Análise e Ingestão de Processos Judiciais</title>
+<style>
+@page{size:A4;margin:0}
+*{box-sizing:border-box}
+body{margin:0;font-family:Helvetica,Arial,sans-serif;color:#2b3340;font-size:11.5px;line-height:1.55}
+.page{width:210mm;height:297mm;padding:17mm 18mm 14mm;position:relative;page-break-after:always;overflow:hidden}
+.page:last-child{page-break-after:auto}
+h1{font-size:27px;line-height:1.2;color:#0f1b2d;margin:0 0 8px}
+.sub{color:#5d7390;font-size:13.5px;margin:0 0 14px;padding-bottom:12px;border-bottom:3px solid #0b6a94}
+h2{font-size:17px;color:#0b6a94;margin:20px 0 8px;padding-bottom:5px;border-bottom:1px solid #e3e8ee}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.cols h2{margin-top:14px}
+p{margin:0 0 8px}
+b{color:#0f1b2d}
+.diagram{background:#f7f9fb;border:1px solid #d7dee6;border-radius:10px;padding:10px 70px}
+.box{border:2px solid #29a3dc;border-radius:5px;background:#fff;text-align:center;padding:4px 10px;font-weight:700;color:#0f1b2d;font-size:11px}
+.box small{display:block;font-weight:400;color:#4b5a6d;font-size:9.5px}
+.box.y{background:#fffbe8;border-color:#f0a21a}
+.arrow{text-align:center;color:#8aa0b6;font-size:13px;line-height:11px;margin:1px 0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+table{width:100%;border-collapse:collapse;border:1px solid #d7dee6;font-size:11px}
+th{background:#f1f5f9;text-align:left;padding:7px 10px;color:#0f1b2d;border-bottom:1px solid #d7dee6}
+td{padding:7px 10px;border-top:1px solid #e3e8ee;vertical-align:top}
+td:first-child{font-weight:700;color:#0f1b2d;width:24%}
+.result{background:#eef6fd;border-left:5px solid #0b6a94;padding:12px 16px 8px;margin-top:16px}
+.result h2{border:0;margin:0 0 8px;padding:0}
+.result p,.result li{color:#0b4a6b;font-weight:700}
+.result ul{margin:4px 0 8px 18px;padding:0}
+.result li{margin-bottom:4px}
+.result li span{font-weight:400;color:#1c3a52}
+.ok{color:#168821;font-weight:700}.wip{color:#b45309;font-weight:700}
+ul.t{margin:0 0 8px 16px;padding:0}ul.t li{margin-bottom:4px}
+.foot{position:absolute;left:18mm;right:18mm;bottom:9mm;border-top:1px solid #e3e8ee;padding-top:6px;display:flex;justify-content:space-between;color:#7b8794;font-size:10px}
+</style></head><body>
+
+<!-- ================= PÁGINA 1 ================= -->
+<section class="page">
+<h1>Plano Executivo: Sistema de Análise e Ingestão de Processos Judiciais</h1>
+<p class="sub">Atualização do projeto: da proposta de arquitetura à plataforma que gera o relatório do analista</p>
+
+<div class="cols">
+<div><h2>1. O que fizemos</h2>
+<p>Construímos uma plataforma que recebe os <b>PDFs de processos judiciais</b> (eproc, PJe e autos digitalizados, inclusive volumes e partes de um mesmo processo), lê o conteúdo com <b>OCR</b> quando necessário e aplica os <b>prompts do analista</b> de cada tipo de processo para <b>preencher a planilha de relatório</b> do caso.</p>
+<p>O analista escolhe o <b>tipo</b> (execução fiscal, embargos, apelação, agravo, outras ações) e o <b>sistema</b>; o prompt correto é aplicado automaticamente. Um <b>chatbot analítico</b> responde sobre o processo citando a origem exata.</p></div>
+<div><h2>2. O porquê</h2>
+<p>Hoje o fluxo é manual: baixar o processo, anexar a uma ferramenta de IA, colar o prompt, copiar o relatório e digitar célula a célula na planilha. Além de lento, a IA <b>confunde Evento (eproc) com ID (PJe)</b> e a página do ato com a página do PDF.</p>
+<p>A solução <b>elimina a digitação</b>, monta as citações pelo código (não pelo modelo), <b>confere cada citação contra o PDF</b> e mantém o analista na decisão final com uma etapa de revisão.</p></div>
+</div>
+
+<h2>3. Desenho da Arquitetura</h2>
+<div class="diagram">
+<div class="box">Usuário / Front-end<small>Caso, importação do Mcfly, upload com tipo e sistema, revisão e chat</small></div><div class="arrow">↓</div>
+<div class="box">API Backend (FastAPI)<small>Recepção, validação e orquestração</small></div><div class="arrow">↓</div>
+<div class="box y">Fila Assíncrona (Redis) + Workers<small>PDFs pesados não travam o sistema; vários workers em paralelo</small></div><div class="arrow">↓</div>
+<div class="box">Worker de Ingestão<small>Texto nato-digital + OCR (refaz o OCR se a camada de texto vier corrompida) + marcadores Evento/ID/página</small></div><div class="arrow">↓</div>
+<div class="two">
+<div class="box">Banco de Metadados<small>Casos, processos, partes, status e revisão</small></div>
+<div class="box y">Elasticsearch<small>Busca híbrida: lexical + vetorial</small></div></div>
+<div class="arrow">↓</div>
+<div class="box y">Extração por processo (LLM + prompts do analista)<small>Junta todas as partes do processo; saída estruturada com listas fechadas</small></div><div class="arrow">↓</div>
+<div class="box">Validação das citações + Revisão do analista<small>Evento/ID/página inexistentes são sinalizados; o analista confere e aprova cada processo</small></div><div class="arrow">↓</div>
+<div class="box y">Planilha única do caso (.xlsx) → Resposta auditável no chat<small>Uma linha por processo, no layout do modelo do analista</small></div>
+</div>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 1 de 3</span></div>
+</section>
+
+<!-- ================= PÁGINA 2 ================= -->
+<section class="page">
+<h2 style="margin-top:0">4. Stack Tecnológica</h2>
+<table>
+<tr><th>Componente</th><th>Tecnologia Escolhida e Justificativa</th></tr>
+<tr><td>Linguagem Core</td><td><b>Python + FastAPI:</b> ecossistema de IA, PDFs e OCR; API simples e testável.</td></tr>
+<tr><td>Mensageria</td><td><b>Redis:</b> enfileira PDFs pesados e evita timeouts; execução também em memória para desenvolvimento.</td></tr>
+<tr><td>Leitura e OCR</td><td><b>PyMuPDF + Tesseract (português):</b> lê texto digital e refaz o OCR de páginas digitalizadas ou com texto corrompido.</td></tr>
+<tr><td>Busca e Armazenamento</td><td><b>Elasticsearch (busca híbrida):</b> similaridade semântica e busca exata por palavra-chave; SQLite para metadados.</td></tr>
+<tr><td>Motor Cognitivo</td><td><b>Google Gemini (AI Studio), com Anthropic como alternativa:</b> provedor intercambiável, saída em JSON restrito ao esquema de cada aba.</td></tr>
+<tr><td>Planilha</td><td><b>openpyxl:</b> gera o .xlsx com as abas e cabeçalhos do modelo (Relatório, Execuções Fiscais, Outras Ações, Embargos, Outros Bens, Alegações de Fraude).</td></tr>
+<tr><td>Front-end</td><td><b>HTML/CSS/JS no padrão visual gov.br:</b> sem dependências externas, simples de hospedar.</td></tr>
+</table>
+
+<div class="result">
+<h2>5. Resultado Esperado (Visão de Front-end)</h2>
+<p>O analista trabalha por <b>caso</b> (devedor ou grupo), e o sistema entrega em três frentes:</p>
+<ul>
+<li>Automação de Planilhas: <span>envia os PDFs, escolhe o tipo, e o sistema monta <b>uma única planilha com uma linha por processo</b>. Volumes e partes do mesmo processo são juntados numa só análise.</span></li>
+<li>Citações confiáveis: <span>eproc cita <b>Evento N, pg. P</b>; PJe cita <b>ID N, pg. P</b>. Toda citação é conferida com o PDF antes de chegar ao analista.</span></li>
+<li>Revisão e Chatbot: <span>o analista aprova cada processo (linhas não revisadas saem destacadas) e pergunta, por exemplo, <i>"Existe valor bloqueado pelo Sisbajud?"</i>, com resposta e página de origem.</span></li>
+</ul>
+<p>O resultado é a <b>padronização do relatório</b> e a redução do tempo de cada processo, sem retirar o analista da decisão.</p>
+</div>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 2 de 3</span></div>
+</section>
+
+<!-- ================= PÁGINA 3 ================= -->
+<section class="page">
+<h1 style="font-size:23px">6. Situação do Projeto e Próximos Passos</h1>
+<p class="sub" style="margin-bottom:6px">O que está pronto, o que foi validado e o que depende de validação com dados reais</p>
+
+<h2>Já implementado</h2>
+<ul class="t">
+<li><span class="ok">Pronto</span> Cadastro por caso, importação do Mcfly e escolha do prompt pelo tipo do processo ou pela classe.</li>
+<li><span class="ok">Pronto</span> Ingestão assíncrona com OCR, detecção de texto corrompido e indexação híbrida.</li>
+<li><span class="ok">Pronto</span> Uma extração por processo juntando volumes e partes (testado com 5 volumes, 204 páginas, 1 chamada ao LLM).</li>
+<li><span class="ok">Pronto</span> Citações por sistema (eproc/PJe) e conferência automática; PDF completo do eproc validado com amostra real.</li>
+<li><span class="ok">Pronto</span> Revisão do analista, planilha única no layout do modelo, chatbot e integração com Gemini (AI Studio).</li>
+</ul>
+
+<h2>Pendências e riscos</h2>
+<table>
+<tr><th>Item</th><th>Situação e ação</th></tr>
+<tr><td>Teste com a chave do Google</td><td><span class="wip">Pendente.</span> Os testes automatizados usam LLM simulado; falta medir a qualidade das extrações com a API real e confirmar o modelo disponível na conta.</td></tr>
+<tr><td>OCR em escala</td><td><span class="wip">Pendente.</span> Os autos digitalizados antigos têm texto embutido corrompido; o Tesseract real ainda não foi exercitado, só por simulação.</td></tr>
+<tr><td>Processo completo do PJe</td><td><span class="wip">Pendente.</span> Regras de detecção escritas pelo rodapé "Num. X - Pág. N"; falta validar com um PDF completo do PJe.</td></tr>
+<tr><td>Layout variável da planilha</td><td><span class="wip">Próximo passo.</span> Usar a planilha do próprio caso como modelo (abas como Recuperação Judicial e DJE com colunas diferentes).</td></tr>
+<tr><td>Confidencialidade (LGPD)</td><td><b>Atenção.</b> Não usar a camada gratuita do AI Studio com processos reais; confirmar nos termos da parceria que os dados não são usados para treinamento. Incluir login (SSO) antes de expor o sistema.</td></tr>
+<tr><td>Listas fechadas</td><td>Validar com o analista os valores de "EXIT. GARANTIA" (hoje só Imóvel e Bacen c/DJE vieram do modelo).</td></tr>
+</table>
+
+<h2>Plano sugerido</h2>
+<ul class="t">
+<li><b>Fase 1 (piloto):</b> subir o ambiente completo (Redis, Elasticsearch, Tesseract) e processar 3 a 5 processos reais já conhecidos, comparando com os relatórios feitos manualmente.</li>
+<li><b>Fase 2 (ajustes):</b> corrigir prompts, listas fechadas e regras de citação com base nas divergências; incluir PJe completo e planilha do caso como modelo.</li>
+<li><b>Fase 3 (produção):</b> autenticação, trilha de auditoria da revisão e monitoramento de custo e tempo por processo.</li>
+</ul>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 3 de 3</span></div>
+</section>
+</body></html>

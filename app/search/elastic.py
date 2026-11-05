@@ -1,16 +1,24 @@
 """Elasticsearch: busca lexical (BM25, analisador português) + kNN vetorial em uma única consulta."""
+import logging
+import time
 from typing import Optional
 
-from elasticsearch import Elasticsearch, helpers
+from elastic_transport import ConnectionError as TransportConnectionError
+from elastic_transport import ConnectionTimeout
+from elasticsearch import ApiError, Elasticsearch, helpers
 
 from .base import Hit, embed
 
 
+log = logging.getLogger("elastic")
+
+
 class ElasticStore:
-    def __init__(self, url: str, index: str, dims: int = 256) -> None:
+    def __init__(self, url: str, index: str, dims: int = 256, wait_seconds: int = 180) -> None:
         self.es = Elasticsearch(url)
         self.index_name = index
         self.dims = dims
+        self._wait_ready(url, wait_seconds)
         if not self.es.indices.exists(index=index):
             self.es.indices.create(
                 index=index,
@@ -23,6 +31,27 @@ class ElasticStore:
                     }
                 },
             )
+
+    def _wait_ready(self, url: str, wait_seconds: int) -> None:
+        """O Elasticsearch leva de 30 a 60 s para subir: espera em vez de derrubar a aplicação."""
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                self.es.cluster.health(wait_for_status="yellow", timeout="5s")
+                return
+            except ApiError as e:
+                if e.status_code not in (502, 503, 504):  # ex.: 400 por versão incompatível do cliente: não adianta esperar
+                    raise RuntimeError(f"Elasticsearch em {url} recusou a conexão ({e.status_code}): {e}") from e
+                err = e
+            except (TransportConnectionError, ConnectionTimeout, OSError) as e:
+                err = e
+            else:
+                err = None
+            if err is not None:
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Elasticsearch indisponível em {url} após {wait_seconds}s: {err}") from err
+                log.warning("Aguardando o Elasticsearch em %s…", url)
+                time.sleep(3)
 
     def index(self, doc_id: str, chunks: list) -> None:
         actions = (
@@ -37,8 +66,8 @@ class ElasticStore:
     def delete(self, doc_id: str) -> None:
         self.es.delete_by_query(index=self.index_name, query={"term": {"doc_id": doc_id}}, refresh=True)
 
-    def search(self, query: str, doc_id: Optional[str], k: int = 6) -> list[Hit]:
-        flt = [{"term": {"doc_id": doc_id}}] if doc_id else []
+    def search(self, query: str, doc_ids: Optional[list[str]], k: int = 6) -> list[Hit]:
+        flt = [{"terms": {"doc_id": doc_ids}}] if doc_ids else []
         resp = self.es.search(
             index=self.index_name,
             size=k,
