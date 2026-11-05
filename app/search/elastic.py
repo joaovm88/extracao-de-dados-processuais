@@ -1,4 +1,6 @@
 """Elasticsearch: busca lexical (BM25, analisador português) + kNN vetorial em uma única consulta."""
+import logging
+import time
 from typing import Optional
 
 from elasticsearch import Elasticsearch, helpers
@@ -6,11 +8,15 @@ from elasticsearch import Elasticsearch, helpers
 from .base import Hit, embed
 
 
+log = logging.getLogger("elastic")
+
+
 class ElasticStore:
-    def __init__(self, url: str, index: str, dims: int = 256) -> None:
+    def __init__(self, url: str, index: str, dims: int = 256, wait_seconds: int = 180) -> None:
         self.es = Elasticsearch(url)
         self.index_name = index
         self.dims = dims
+        self._wait_ready(url, wait_seconds)
         if not self.es.indices.exists(index=index):
             self.es.indices.create(
                 index=index,
@@ -23,6 +29,19 @@ class ElasticStore:
                     }
                 },
             )
+
+    def _wait_ready(self, url: str, wait_seconds: int) -> None:
+        """O Elasticsearch leva de 30 a 60 s para subir: espera em vez de derrubar a aplicação."""
+        deadline = time.monotonic() + wait_seconds
+        while True:
+            try:
+                self.es.cluster.health(wait_for_status="yellow", timeout="5s")
+                return
+            except Exception as e:  # noqa: BLE001
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"Elasticsearch indisponível em {url} após {wait_seconds}s: {e}") from e
+                log.warning("Aguardando o Elasticsearch em %s…", url)
+                time.sleep(3)
 
     def index(self, doc_id: str, chunks: list) -> None:
         actions = (

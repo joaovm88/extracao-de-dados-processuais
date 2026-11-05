@@ -480,3 +480,31 @@ def test_new_part_after_review_marks_process_outdated_until_reextract(env):
             break
         time.sleep(0.1)
     assert p["result"]["paginas"] == 2 and p["result"]["fields"]["valor_garantia"] == "R$ 2.627.732,00"
+
+
+def test_elastic_store_waits_for_elasticsearch_instead_of_crashing(monkeypatch):
+    from app.search import elastic
+
+    calls = {"n": 0}
+
+    class FakeIndices:
+        def exists(self, index): return True
+
+    class FakeCluster:
+        def health(self, **kw):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ConnectionError("ainda subindo")
+
+    class FakeES:
+        def __init__(self, url): self.cluster, self.indices = FakeCluster(), FakeIndices()
+
+    monkeypatch.setattr(elastic, "Elasticsearch", FakeES)
+    monkeypatch.setattr(elastic.time, "sleep", lambda s: None)
+    elastic.ElasticStore("http://es:9200", "idx")
+    assert calls["n"] == 3  # tentou 3 vezes e seguiu quando o ES respondeu
+
+    calls["n"] = -10**6  # nunca responde
+    monkeypatch.setattr(elastic.time, "monotonic", iter(range(0, 10**6, 100)).__next__)
+    with pytest.raises(RuntimeError, match="indisponível"):
+        elastic.ElasticStore("http://es:9200", "idx", wait_seconds=200)
