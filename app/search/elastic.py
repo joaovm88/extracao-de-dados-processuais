@@ -3,7 +3,9 @@ import logging
 import time
 from typing import Optional
 
-from elasticsearch import Elasticsearch, helpers
+from elastic_transport import ConnectionError as TransportConnectionError
+from elastic_transport import ConnectionTimeout
+from elasticsearch import ApiError, Elasticsearch, helpers
 
 from .base import Hit, embed
 
@@ -37,9 +39,17 @@ class ElasticStore:
             try:
                 self.es.cluster.health(wait_for_status="yellow", timeout="5s")
                 return
-            except Exception as e:  # noqa: BLE001
+            except ApiError as e:
+                if e.status_code not in (502, 503, 504):  # ex.: 400 por versão incompatível do cliente: não adianta esperar
+                    raise RuntimeError(f"Elasticsearch em {url} recusou a conexão ({e.status_code}): {e}") from e
+                err = e
+            except (TransportConnectionError, ConnectionTimeout, OSError) as e:
+                err = e
+            else:
+                err = None
+            if err is not None:
                 if time.monotonic() > deadline:
-                    raise RuntimeError(f"Elasticsearch indisponível em {url} após {wait_seconds}s: {e}") from e
+                    raise RuntimeError(f"Elasticsearch indisponível em {url} após {wait_seconds}s: {err}") from err
                 log.warning("Aguardando o Elasticsearch em %s…", url)
                 time.sleep(3)
 

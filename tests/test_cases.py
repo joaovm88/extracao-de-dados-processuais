@@ -508,3 +508,26 @@ def test_elastic_store_waits_for_elasticsearch_instead_of_crashing(monkeypatch):
     monkeypatch.setattr(elastic.time, "monotonic", iter(range(0, 10**6, 100)).__next__)
     with pytest.raises(RuntimeError, match="indisponível"):
         elastic.ElasticStore("http://es:9200", "idx", wait_seconds=200)
+
+
+def test_elastic_store_fails_fast_on_version_mismatch(monkeypatch):
+    """Cliente 9.x contra servidor 8.x gera HTTP 400: esperar não resolve, tem de falhar logo e claro."""
+    from elastic_transport import ApiResponseMeta, HttpHeaders, NodeConfig
+    from elasticsearch import ApiError
+
+    from app.search import elastic
+
+    meta = ApiResponseMeta(status=400, http_version="1.1", headers=HttpHeaders(), duration=0.0,
+                           node=NodeConfig("http", "es", 9200))
+
+    class FakeCluster:
+        def health(self, **kw):
+            raise ApiError("media_type_header_exception", meta, {"error": "Accept version must be either version 8 or 7"})
+
+    class FakeES:
+        def __init__(self, url): self.cluster = FakeCluster()
+
+    monkeypatch.setattr(elastic, "Elasticsearch", FakeES)
+    monkeypatch.setattr(elastic.time, "sleep", lambda s: pytest.fail("não deveria esperar"))
+    with pytest.raises(RuntimeError, match="recusou a conexão"):
+        elastic.ElasticStore("http://es:9200", "idx")
