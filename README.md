@@ -75,6 +75,11 @@ docker compose run --rm --no-deps api python -c "import os; from google import g
 ```
 Use um nome da lista sem o prefixo `models/`. Modelos "preview" têm limites menores no nível gratuito.
 
+**Erro 429 / "Limite de uso do Gemini atingido"** (comum no nível gratuito com processos de centenas de páginas):
+1. Use um modelo "flash" da lista (limites maiores).
+2. Reduza o texto enviado por processo com `CONTEXT_BUDGET_CHARS` no `.env` (4 caracteres ≈ 1 token; `100000` ≈ 25 mil tokens). O sistema então manda só os trechos mais relevantes e as páginas finais; confira o resultado na revisão.
+3. Limite por minuto com prazo ("retry in 30s"): o sistema espera e tenta de novo sozinho (até 2 vezes). Cota diária esgotada ou plano sem cota: só esperar o dia seguinte ou ativar faturamento.
+
 ## Limitações / pendências
 - Lista fechada de `EXIT. GARANTIA`: só IMÓVEL e BACEN C/DJE vieram do modelo; o resto (VEÍCULO, FIANÇA/SEGURO GARANTIA, OUTROS, NÃO HÁ) é suposição em `app/schemas.py`.
 - Marcadores de Evento/ID foram escritos para PJe/eproc sem amostra real; só foi testado um PDF digitalizado de processo físico. Valide com PDFs eletrônicos.

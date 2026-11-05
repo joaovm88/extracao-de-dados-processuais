@@ -16,6 +16,8 @@ class Settings:
         self.gemini_model = env("GEMINI_MODEL", "gemini-3.1-pro-preview")
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")
         self.llm_model = env("LLM_MODEL", "claude-sonnet-5-5")
+        # Texto máximo enviado ao LLM por processo (≈ 4 caracteres por token). Reduza no nível gratuito do Gemini.
+        self.context_budget_chars = int(env("CONTEXT_BUDGET_CHARS", "400000"))
         self.ocr_lang = env("OCR_LANG", "por")
         self.ocr_dpi = int(env("OCR_DPI", "200"))
         self.min_text_chars = int(env("MIN_TEXT_CHARS", "40"))

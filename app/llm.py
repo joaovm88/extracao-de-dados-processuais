@@ -3,6 +3,9 @@
 Contrato: `extract(system, user, schema)` devolve um dict que obedece ao JSON Schema;
 `generate(system, user)` devolve texto livre (chat RAG)."""
 import json
+import math
+import re
+import time
 from typing import Optional, Protocol
 
 from .config import Settings
@@ -15,6 +18,18 @@ class LLMProvider(Protocol):
     def generate(self, system: str, user: str, max_tokens: int = 1000) -> str: ...
 
 
+def _retry_delay(e: Exception) -> Optional[float]:
+    """Limite POR MINUTO (429 com 'retry in 32s'): vale esperar e repetir. Cota diária ou sem prazo: não."""
+    txt = str(e)
+    if "429" not in txt and "RESOURCE_EXHAUSTED" not in txt:
+        return None
+    m = re.search(r"retry in ([\d.]+)\s*s", txt, re.IGNORECASE) or re.search(r"retryDelay['\"]?:\s*['\"]?([\d.]+)s", txt)
+    if not m:
+        return None
+    delay = math.ceil(float(m.group(1))) + 1
+    return delay if delay <= 75 else None
+
+
 class GeminiProvider:
     name = "gemini"
 
@@ -25,6 +40,17 @@ class GeminiProvider:
             client = genai.Client(api_key=api_key)
         self.client, self.model = client, model
 
+    def _call(self, **kw):
+        """generate_content com até 2 novas tentativas quando o limite por minuto estoura."""
+        for attempt in range(3):
+            try:
+                return self.client.models.generate_content(**kw)
+            except Exception as e:  # noqa: BLE001
+                delay = _retry_delay(e)
+                if delay is None or attempt == 2:
+                    raise
+                time.sleep(delay)
+
     def _config(self, system: str, **kw):
         from google.genai import types
 
@@ -32,7 +58,7 @@ class GeminiProvider:
 
     def extract(self, system: str, user: str, schema: dict) -> dict:
         try:
-            resp = self.client.models.generate_content(
+            resp = self._call(
                 model=self.model, contents=user,
                 config=self._config(system, response_mime_type="application/json", response_json_schema=schema,
                                     max_output_tokens=16000))
@@ -40,13 +66,13 @@ class GeminiProvider:
             if "schema" not in str(e).lower() and "INVALID_ARGUMENT" not in str(e):
                 raise
             hint = "\n\nResponda SOMENTE com um objeto JSON com estas propriedades: " + json.dumps(schema["properties"], ensure_ascii=False)
-            resp = self.client.models.generate_content(
+            resp = self._call(
                 model=self.model, contents=user,
                 config=self._config(system + hint, response_mime_type="application/json", max_output_tokens=16000))
         return _loads(resp.text)
 
     def generate(self, system: str, user: str, max_tokens: int = 1000) -> str:
-        resp = self.client.models.generate_content(
+        resp = self._call(
             model=self.model, contents=user, config=self._config(system, max_output_tokens=max_tokens))
         return resp.text or ""
 

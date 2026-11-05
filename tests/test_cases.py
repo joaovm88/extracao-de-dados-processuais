@@ -531,3 +531,42 @@ def test_elastic_store_fails_fast_on_version_mismatch(monkeypatch):
     monkeypatch.setattr(elastic.time, "sleep", lambda s: pytest.fail("não deveria esperar"))
     with pytest.raises(RuntimeError, match="recusou a conexão"):
         elastic.ElasticStore("http://es:9200", "idx")
+
+
+def test_gemini_retries_per_minute_limit_but_not_daily_quota(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    esperas = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: esperas.append(s))
+
+    class Models:
+        def __init__(self, falhas, msg):
+            self.falhas, self.msg, self.n = falhas, msg, 0
+
+        def generate_content(self, model, contents, config):
+            self.n += 1
+            if self.n <= self.falhas:
+                raise RuntimeError(self.msg)
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    schema = ex.tool_schema(SHEETS["outras_acoes"])
+    m = Models(2, "429 RESOURCE_EXHAUSTED: Please retry in 30.2s")
+    assert GeminiProvider("k", "m", SimpleNamespace(models=m)).extract("s", "u", schema) == {"observacoes": "ok"}
+    assert m.n == 3 and esperas == [32, 32]  # esperou o prazo informado pelo Google
+    m2 = Models(9, "429 RESOURCE_EXHAUSTED: quota exceeded, check your plan")  # sem prazo: cota diária/plano
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "m", SimpleNamespace(models=m2)).extract("s", "u", schema)
+    assert m2.n == 1  # não insiste
+    m3 = Models(9, "429 RESOURCE_EXHAUSTED: retry in 600s")  # espera longa demais: falha logo
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "m", SimpleNamespace(models=m3)).extract("s", "u", schema)
+    assert m3.n == 1
+
+
+def test_context_budget_is_configurable(env, monkeypatch):
+    c, llm, tmp = env
+    monkeypatch.setenv("CONTEXT_BUDGET_CHARS", "10")
+    assert Settings().context_budget_chars == 10
+    monkeypatch.delenv("CONTEXT_BUDGET_CHARS")
+    assert Settings().context_budget_chars == 400000

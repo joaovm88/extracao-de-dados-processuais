@@ -18,7 +18,6 @@ from .schemas import NAO_ENCONTRADO, SHEETS, resolve_tipo
 from .search.base import SearchStore
 
 log = logging.getLogger("worker")
-CONTEXT_BUDGET = 400_000  # caracteres enviados ao LLM por processo (~100k tokens)
 EXTRACT_PREFIX = "extract:"
 READY_PREFIX = "ready:"
 
@@ -155,7 +154,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                   "documentos": [d["filename"] for d in docs], "paginas": len(pages)}
         llm = llm_client or get_llm(settings)
         if llm is not None:
-            context = ex.select_context(pages, CONTEXT_BUDGET, store, [d["id"] for d in docs])
+            context = ex.select_context(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
             out = ex.extract_with_llm(sheet, prompt, context, llm, sistema)
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
