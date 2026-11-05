@@ -225,3 +225,36 @@ def test_failed_upload_leaves_no_orphan_row_and_same_content_is_not_duplicated(t
             with pdf.open("rb") as f:
                 assert c.post("/api/documents", data={"case_id": case["id"]}, files={"file": (nome, f, "application/pdf")}).status_code == 202
         assert len(app.state.db.list(case["id"])) == 1
+
+
+def test_llm_errors_are_explained_to_the_analyst():
+    from app.worker import explain_llm_error
+
+    assert "Limite de uso" in explain_llm_error(RuntimeError("429 RESOURCE_EXHAUSTED: quota exceeded"))
+    assert "GEMINI_API_KEY" in explain_llm_error(RuntimeError("403 PERMISSION_DENIED: API key not valid"))
+    assert "GEMINI_MODEL" in explain_llm_error(RuntimeError("404 NOT_FOUND: models/xyz is not found"))
+    assert "indisponível" in explain_llm_error(RuntimeError("503 UNAVAILABLE"))
+    assert "Detalhe técnico" in explain_llm_error(ValueError("outra coisa"))
+
+
+def test_failed_extraction_shows_reason_and_can_be_retried(tmp_path, monkeypatch):
+    class Quebra:
+        name = "q"
+        def extract(self, *a): raise RuntimeError("429 RESOURCE_EXHAUSTED")
+        def generate(self, *a, **k): return ""
+
+    app = _env_app(tmp_path, monkeypatch, llm=Quebra())
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app) as c:
+        with pdf.open("rb") as f:
+            up = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("x.pdf", f, "application/pdf")}).json()
+        for _ in range(150):
+            cs = c.get(f"/api/cases/{case['id']}").json()
+            if cs["processos"] and cs["processos"][0]["estado"] == "erro":
+                break
+            time.sleep(0.1)
+        p = cs["processos"][0]
+        assert p["estado"] == "erro" and "Limite de uso do Gemini" in p["error"]
+        assert c.post(f"/api/cases/{case['id']}/processes/{p['numero']}/reextract").status_code == 202

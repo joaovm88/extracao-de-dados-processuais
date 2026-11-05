@@ -43,12 +43,13 @@ async function refreshCase() {
     return `<tr class="${p.numero === selProc ? 'sel' : ''}"><td>${esc(p.numero)}</td><td>${esc((p.mcfly || {}).classe || p.classe)}</td>
       <td>${p.modelo ? esc(p.modelo) : ''}</td>
       <td>${ds.length ? ds.length + ' PDF(s)' : ''}${andamento.length ? `<div class="bar"><i style="width:${100 * pct}%"></i></div>` : ''}</td>
-      <td><span class="tag ${cls}">${txt}</span> ${p.estado === 'pronto' ? (p.reviewed ? '<span class="tag ok">revisado</span>' : '<span class="tag warn">revisar</span>') : ''}</td>
-      <td>${['pronto', 'desatualizado'].includes(p.estado) ? `<button class="btn" data-open="${esc(p.numero)}">Revisar / perguntar</button>` : ''}</td></tr>`;
+      <td><span class="tag ${cls}">${txt}</span>${p.error ? `<div class="hint err-msg">${esc(p.error)}</div>` : ''} ${p.estado === 'pronto' ? (p.reviewed ? '<span class="tag ok">revisado</span>' : '<span class="tag warn">revisar</span>') : ''}</td>
+      <td>${['pronto', 'desatualizado'].includes(p.estado) ? `<button class="btn" data-open="${esc(p.numero)}">Revisar / perguntar</button>` : ''}${p.estado === 'erro' && p.documentos.length ? `<button class="btn" data-again="${esc(p.numero)}">Tentar novamente</button>` : ''}</td></tr>`;
   });
   const avulsos = c.documentos.filter(d => !d.numero_processo && d.status !== 'queued' && d.status !== 'processing');
   $('procs').tBodies[0].innerHTML = rows.join('') || '<tr><td colspan="6">Importe o Mcfly e envie os PDFs.</td></tr>';
   $('orphans').textContent = avulsos.length ? `${avulsos.length} PDF(s) sem nº de processo identificado: ${avulsos.map(d => d.filename).join(', ')}` : '';
+  document.querySelectorAll('[data-again]').forEach(b => b.onclick = async () => { await api(`/api/cases/${caseId}/processes/${encodeURIComponent(b.dataset.again)}/reextract`, {method: 'POST'}); refreshCase(); });
   document.querySelectorAll('[data-open]').forEach(b => b.onclick = () => selectProc(b.dataset.open));
   const DST = {queued: ['warn', 'na fila'], processing: ['warn', 'processando'], done: ['ok', 'lido'], error: ['err', 'erro']};
   $('docs').tBodies[0].innerHTML = c.documentos.map(d => {

@@ -23,6 +23,26 @@ EXTRACT_PREFIX = "extract:"
 READY_PREFIX = "ready:"
 
 
+def explain_llm_error(e: Exception) -> str:
+    """Traduz falhas comuns da API de IA em orientação para o analista (a mensagem original segue junto)."""
+    raw = f"{type(e).__name__}: {e}"
+    low = raw.lower()
+    if "429" in low or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
+        dica = ("Limite de uso do Gemini atingido (comum no nível gratuito, com processos grandes). Aguarde alguns "
+                "minutos e use 'Tentar novamente', ou troque GEMINI_MODEL por um modelo mais leve (ex.: gemini-2.5-flash).")
+    elif "api key" in low or "api_key" in low or "401" in low or "403" in low or "permission_denied" in low or "unauthenticated" in low:
+        dica = "Chave do Gemini inválida, expirada ou sem permissão. Confira GEMINI_API_KEY no arquivo .env."
+    elif "404" in low or "not_found" in low or "is not found" in low or "not supported" in low:
+        dica = "Modelo do Gemini não encontrado para a sua conta. Ajuste GEMINI_MODEL no .env para um modelo disponível no AI Studio."
+    elif "503" in low or "unavailable" in low or "overloaded" in low or "timeout" in low or "deadline" in low:
+        dica = "O serviço do Gemini está indisponível ou lento no momento. Tente novamente em alguns minutos."
+    elif "json" in low:
+        dica = "A IA devolveu uma resposta fora do formato esperado. Tente novamente."
+    else:
+        dica = "Falha na extração por IA."
+    return f"{dica} Detalhe técnico: {raw[:400]}"
+
+
 def pages_path(settings: Settings, doc_id: str):
     d = settings.data_dir / "pages"
     d.mkdir(parents=True, exist_ok=True)
@@ -149,7 +169,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                              reviewed=0, error=None)
     except Exception as e:  # noqa: BLE001
         log.exception("falha na extração de %s", numero)
-        db.finish_extraction(case_id, numero, error=str(e))
+        db.finish_extraction(case_id, numero, error=explain_llm_error(e))
 
 
 def handle_job(job: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:
