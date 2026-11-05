@@ -29,11 +29,12 @@ def explain_llm_error(e: Exception) -> str:
     low = raw.lower()
     if "429" in low or "resource_exhausted" in low or "quota" in low or "rate limit" in low:
         dica = ("Limite de uso do Gemini atingido (comum no nível gratuito, com processos grandes). Aguarde alguns "
-                "minutos e use 'Tentar novamente', ou troque GEMINI_MODEL por um modelo mais leve (ex.: gemini-2.5-flash).")
+                "minutos e use 'Tentar novamente', ou troque GEMINI_MODEL por um modelo mais leve (veja os disponíveis no README).")
     elif "api key" in low or "api_key" in low or "401" in low or "403" in low or "permission_denied" in low or "unauthenticated" in low:
         dica = "Chave do Gemini inválida, expirada ou sem permissão. Confira GEMINI_API_KEY no arquivo .env."
     elif "404" in low or "not_found" in low or "is not found" in low or "not supported" in low:
-        dica = "Modelo do Gemini não encontrado para a sua conta. Ajuste GEMINI_MODEL no .env para um modelo disponível no AI Studio."
+        dica = ("Modelo do Gemini indisponível para a sua conta (modelos antigos saem do ar para contas novas). Ajuste GEMINI_MODEL "
+                "no .env para um modelo listado no AI Studio, ou liste os disponíveis com o comando do README, e reinicie com docker compose up.")
     elif "503" in low or "unavailable" in low or "overloaded" in low or "timeout" in low or "deadline" in low:
         dica = "O serviço do Gemini está indisponível ou lento no momento. Tente novamente em alguns minutos."
     elif "json" in low:

@@ -6,7 +6,7 @@ x-env: &env
   ELASTICSEARCH_URL: http://elasticsearch:9200
   LLM_PROVIDER: ${LLM_PROVIDER:-auto}
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-pro}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-pro-preview}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   DATA_DIR: /data
 services:

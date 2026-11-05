@@ -13,7 +13,7 @@ class Settings:
         # LLM: "auto" escolhe Gemini (Google AI Studio) se houver chave, senão Anthropic, senão nenhum
         self.llm_provider = env("LLM_PROVIDER", "auto").lower()
         self.gemini_api_key = env("GEMINI_API_KEY", "") or env("GOOGLE_API_KEY", "")
-        self.gemini_model = env("GEMINI_MODEL", "gemini-2.5-pro")
+        self.gemini_model = env("GEMINI_MODEL", "gemini-3.1-pro-preview")
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")
         self.llm_model = env("LLM_MODEL", "claude-sonnet-5-5")
         self.ocr_lang = env("OCR_LANG", "por")
