@@ -56,8 +56,9 @@ async function refreshCase() {
     return `<tr><td>${esc(d.filename)}</td><td><span class="tag ${cls}">${txt}</span></td>
       <td>${d.pages_done}/${d.pages_total}${d.pages_ocr ? ` (${d.pages_ocr} por OCR)` : ''}</td>
       <td>${esc(d.error || (d.numero_processo ? 'Processo ' + d.numero_processo : 'nº do processo não identificado'))}</td>
-      <td>${['error', 'processing', 'queued'].includes(d.status) ? `<button class="btn" data-retry="${d.id}">Reprocessar</button>` : ''}</td></tr>`;
+      <td>${['error', 'processing', 'queued'].includes(d.status) ? `<button class="btn" data-retry="${d.id}">Reprocessar</button> ` : ''}<button class="btn" data-del="${d.id}">Excluir</button></td></tr>`;
   }).join('') || '<tr><td colspan="5">Nenhum PDF enviado.</td></tr>';
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { if (confirm('Excluir este PDF? O processo será reextraído sem ele.')) { await api(`/api/documents/${b.dataset.del}`, {method: 'DELETE'}); refreshCase(); } });
   document.querySelectorAll('[data-retry]').forEach(b => b.onclick = async () => { await api(`/api/documents/${b.dataset.retry}/retry`, {method: 'POST'}); refreshCase(); });
 }
 async function selectProc(numero) {

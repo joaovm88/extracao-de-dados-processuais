@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import threading
 import time
@@ -19,7 +20,7 @@ from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
 from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
-from .worker import EXTRACT_PREFIX, run_worker
+from .worker import EXTRACT_PREFIX, READY_PREFIX, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -201,8 +202,10 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         doc_id = uuid.uuid4().hex
         dest = s.upload_dir / f"{doc_id}.pdf"
         size, limit = 0, s.max_upload_mb * 1024 * 1024
+        sha = hashlib.sha256()
         with dest.open("wb") as out:  # grava em streaming, sem carregar tudo em memória
             while chunk := await file.read(1024 * 1024):
+                sha.update(chunk)
                 size += len(chunk)
                 if size > limit:
                     out.close()
@@ -218,15 +221,42 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         vol = volume if volume is not None else info["volume"]
         ini = pagina_inicial or info["pagina_inicial"] or 1
         num = numero_processo or info["numero_processo"]
-        for old in db.list(case_id):  # mesmo trecho reenviado: substitui, não duplica
-            if num and old["numero_processo"] == num and old["volume"] == vol and old["page_start"] == ini and old["parte"] == info["parte"]:
-                store.delete(old["id"])
-                db.delete_doc(old["id"])
-        db.create(doc_id, Path(file.filename).name, str(dest), case_id,
-                  numero_processo=num, volume=vol, evento=info["evento"], parte=info["parte"], tipo=tipo,
-                  sistema=sistema, page_start=ini)
-        queue.enqueue(doc_id)
+        digest = sha.hexdigest()
+        try:
+            for old in db.list(case_id):  # mesmo arquivo (conteúdo) ou mesmo trecho reenviado: substitui, não duplica
+                same_part = (num and old["numero_processo"] == num and old["volume"] == vol
+                             and old["page_start"] == ini and old["parte"] == info["parte"])
+                if old.get("sha256") == digest or same_part:
+                    _remove_doc(old)
+            db.create(doc_id, Path(file.filename).name, str(dest), case_id,
+                      numero_processo=num, volume=vol, evento=info["evento"], parte=info["parte"], tipo=tipo,
+                      sistema=sistema, page_start=ini, sha256=digest)
+            queue.enqueue(doc_id)
+        except Exception:
+            # nunca deixar um registro "na fila" sem estar de fato na fila (travava o caso inteiro)
+            db.delete_doc(doc_id)
+            dest.unlink(missing_ok=True)
+            raise
         return {"id": doc_id, "status": "queued", **info}
+
+    def _remove_doc(d: dict) -> None:
+        store.delete(d["id"])
+        db.delete_doc(d["id"])
+        Path(d["path"]).unlink(missing_ok=True)
+        pages_path(s, d["id"]).unlink(missing_ok=True)
+
+    @app.delete("/api/documents/{doc_id}", status_code=202)
+    def delete_doc(doc_id: str):
+        """Exclui um PDF (ex.: duplicado ou travado). O caso é destravado e o processo, reextraído se preciso."""
+        d = db.get(doc_id)
+        if not d:
+            raise HTTPException(404, "Documento não encontrado.")
+        _remove_doc(d)
+        if d["case_id"]:
+            if d["numero_processo"] and db.get_process(d["case_id"], d["numero_processo"]):
+                db.mark_stale(d["case_id"], d["numero_processo"])
+            queue.enqueue(f"{READY_PREFIX}{d['case_id']}")
+        return {"status": "deleted"}
 
     @app.get("/api/documents")
     def list_docs(case_id: Optional[str] = None):

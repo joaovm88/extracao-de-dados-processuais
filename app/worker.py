@@ -20,6 +20,7 @@ from .search.base import SearchStore
 log = logging.getLogger("worker")
 CONTEXT_BUDGET = 400_000  # caracteres enviados ao LLM por processo (~100k tokens)
 EXTRACT_PREFIX = "extract:"
+READY_PREFIX = "ready:"
 
 
 def pages_path(settings: Settings, doc_id: str):
@@ -115,6 +116,9 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
         return
     try:
         docs = db.docs_for_process(case_id, numero)
+        if not docs:  # todos os PDFs do processo foram excluídos
+            db.finish_extraction(case_id, numero, error=None)
+            return
         pages: list[dict] = []
         for d in docs:  # partes na ordem dos autos
             for p in json.loads(pages_path(settings, d["id"]).read_text(encoding="utf-8")):
@@ -152,6 +156,8 @@ def handle_job(job: str, settings: Settings, db: MetadataDB, store: SearchStore,
     if job.startswith(EXTRACT_PREFIX):  # reextração sob pedido: "extract:<case_id>|<numero>"
         case_id, numero = job[len(EXTRACT_PREFIX):].split("|", 1)
         extract_process(case_id, numero, settings, db, store, llm_client)
+    elif job.startswith(READY_PREFIX):  # destrava o caso (ex.: PDF excluído) e extrai o que estiver pendente
+        extract_ready(job[len(READY_PREFIX):], settings, db, store, llm_client)
     else:
         process_document(job, settings, db, store, llm_client)
 

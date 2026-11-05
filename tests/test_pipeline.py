@@ -170,3 +170,58 @@ def test_stuck_documents_are_recovered_on_startup_and_can_be_retried(tmp_path, m
             time.sleep(0.1)
         assert d["status"] == "done" and d["error"] is None
         assert c.post("/api/documents/nope/retry").status_code == 404
+
+
+def _env_app(tmp_path, monkeypatch, llm=None):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("QUEUE_BACKEND", "memory")
+    monkeypatch.setenv("SEARCH_BACKEND", "memory")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    return create_app(Settings(), llm_client=llm)
+
+
+def test_deleting_a_stuck_pdf_unblocks_the_case_and_triggers_extraction(tmp_path, monkeypatch):
+    app = _env_app(tmp_path, monkeypatch)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    # PDF "na fila" órfão (resto de upload que falhou) bloqueava o caso
+    app.state.db.create("orfao", "x.pdf", str(pdf), case["id"])
+    with TestClient(app) as c:
+        app.state.db.update("orfao", status="queued")
+        with pdf.open("rb") as f:
+            up = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("y.pdf", f, "application/pdf")}).json()
+        for _ in range(100):
+            if c.get(f"/api/documents/{up['id']}").json()["status"] == "done":
+                break
+            time.sleep(0.1)
+        time.sleep(0.3)
+        num = c.get(f"/api/documents/{up['id']}").json()["numero_processo"]
+        assert c.get(f"/api/cases/{case['id']}/processes/{num}").json()["estado"] in ("aguardando", "pronto")
+        assert c.delete("/api/documents/orfao").status_code == 202
+        for _ in range(100):
+            p = c.get(f"/api/cases/{case['id']}/processes/{num}").json()
+            if p["estado"] == "pronto":
+                break
+            time.sleep(0.1)
+        assert p["estado"] == "pronto" and p["result"]["modo"] == "sem_llm"
+        assert c.delete("/api/documents/nope").status_code == 404
+
+
+def test_failed_upload_leaves_no_orphan_row_and_same_content_is_not_duplicated(tmp_path, monkeypatch):
+    app = _env_app(tmp_path, monkeypatch)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app, raise_server_exceptions=False) as c:
+        original = app.state.queue.enqueue
+        app.state.queue.enqueue = lambda *a: (_ for _ in ()).throw(RuntimeError("redis fora"))
+        with pdf.open("rb") as f:
+            r = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("a.pdf", f, "application/pdf")})
+        assert r.status_code == 500 and app.state.db.list(case["id"]) == []  # sem registro órfão
+        app.state.queue.enqueue = original
+        for nome in ("a.pdf", "a_compressed.pdf"):  # mesmo conteúdo, nomes diferentes
+            with pdf.open("rb") as f:
+                assert c.post("/api/documents", data={"case_id": case["id"]}, files={"file": (nome, f, "application/pdf")}).status_code == 202
+        assert len(app.state.db.list(case["id"])) == 1

@@ -18,7 +18,7 @@ _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEG
 _DOC_COLS = {"case_id": "TEXT", "numero_processo": "TEXT", "volume": "INTEGER", "evento": "TEXT", "tipo": "TEXT",
              "sistema": "TEXT", "parte": "INTEGER", "page_start": "INTEGER DEFAULT 1", "classe": "TEXT",
              "pages_total": "INTEGER DEFAULT 0", "pages_done": "INTEGER DEFAULT 0", "pages_ocr": "INTEGER DEFAULT 0",
-             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL"}
+             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL", "sha256": "TEXT"}
 
 
 class MetadataDB:
@@ -39,7 +39,7 @@ class MetadataDB:
                     status TEXT NOT NULL, numero_processo TEXT, volume INTEGER, evento TEXT, tipo TEXT, sistema TEXT,
                     parte INTEGER, page_start INTEGER DEFAULT 1, classe TEXT, pages_total INTEGER DEFAULT 0,
                     pages_done INTEGER DEFAULT 0, pages_ocr INTEGER DEFAULT 0, error TEXT, metadata TEXT,
-                    created_at REAL, updated_at REAL);
+                    created_at REAL, updated_at REAL, sha256 TEXT);
                 """
             )
             have = {r["name"] for r in self._conn.execute("PRAGMA table_info(processes)")}
