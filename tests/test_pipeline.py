@@ -258,3 +258,12 @@ def test_failed_extraction_shows_reason_and_can_be_retried(tmp_path, monkeypatch
         p = cs["processos"][0]
         assert p["estado"] == "erro" and "Limite de uso do Gemini" in p["error"]
         assert c.post(f"/api/cases/{case['id']}/processes/{p['numero']}/reextract").status_code == 202
+
+
+def test_dockerfile_copies_every_runtime_directory():
+    """A imagem precisa de app/, static/ e prompts/ (sem prompts/ a extração falhava só dentro do Docker)."""
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    for pasta in ("app", "static", "prompts"):
+        assert f"COPY {pasta} {pasta}" in dockerfile
