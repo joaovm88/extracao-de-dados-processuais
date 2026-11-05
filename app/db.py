@@ -14,6 +14,13 @@ _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEG
               "sheet": "TEXT", "tipo": "TEXT", "sistema": "TEXT", "error": "TEXT"}
 
 
+# Colunas de documents adicionadas ao longo das versões: bancos antigos (volume do Docker) são migrados na abertura.
+_DOC_COLS = {"case_id": "TEXT", "numero_processo": "TEXT", "volume": "INTEGER", "evento": "TEXT", "tipo": "TEXT",
+             "sistema": "TEXT", "parte": "INTEGER", "page_start": "INTEGER DEFAULT 1", "classe": "TEXT",
+             "pages_total": "INTEGER DEFAULT 0", "pages_done": "INTEGER DEFAULT 0", "pages_ocr": "INTEGER DEFAULT 0",
+             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL"}
+
+
 class MetadataDB:
     def __init__(self, path) -> None:
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
@@ -40,8 +47,9 @@ class MetadataDB:
                 if col not in have:
                     self._conn.execute(f"ALTER TABLE processes ADD COLUMN {col} {typ}")
             have = {r["name"] for r in self._conn.execute("PRAGMA table_info(documents)")}
-            if "parte" not in have:
-                self._conn.execute("ALTER TABLE documents ADD COLUMN parte INTEGER")
+            for col, typ in _DOC_COLS.items():
+                if col not in have:
+                    self._conn.execute(f"ALTER TABLE documents ADD COLUMN {col} {typ}")
             self._conn.commit()
 
     @staticmethod

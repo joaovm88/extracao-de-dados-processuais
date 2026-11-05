@@ -108,3 +108,32 @@ def test_unexpected_error_returns_readable_json(tmp_path, monkeypatch):
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.post("/api/documents", files={"file": ("x.pdf", b"%PDF-1.4", "application/pdf")})
     assert r.status_code == 500 and "banco indisponível" in r.json()["detail"]
+
+
+def test_old_database_schema_is_migrated(tmp_path):
+    """Banco criado por versão antiga (sem tipo/sistema/evento…) não pode quebrar o envio de PDFs."""
+    import sqlite3
+
+    from app.db import MetadataDB
+
+    path = tmp_path / "old.sqlite3"
+    con = sqlite3.connect(path)
+    con.executescript("""
+        CREATE TABLE documents (id TEXT PRIMARY KEY, filename TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL,
+                                pages_total INTEGER DEFAULT 0, pages_done INTEGER DEFAULT 0, pages_ocr INTEGER DEFAULT 0,
+                                error TEXT, metadata TEXT, created_at REAL, updated_at REAL);
+        CREATE TABLE processes (id TEXT PRIMARY KEY, case_id TEXT NOT NULL, numero TEXT NOT NULL, mcfly TEXT,
+                                UNIQUE(case_id, numero));
+        INSERT INTO documents (id, filename, path, status) VALUES ('velho', 'a.pdf', '/x', 'done');
+    """)
+    con.commit()
+    con.close()
+    db = MetadataDB(path)
+    case = db.create_case("c")
+    db.create("novo", "b.pdf", "/y", case["id"], tipo="execucao_fiscal", sistema="eproc", parte=2, evento="14",
+              numero_processo="1", volume=1, page_start=3)
+    d = db.get("novo")
+    assert (d["tipo"], d["sistema"], d["parte"], d["evento"]) == ("execucao_fiscal", "eproc", 2, "14")
+    assert db.get("velho")["status"] == "done"  # dados antigos preservados
+    db.mark_stale(case["id"], "1")  # tabela processes também migrada
+    assert db.get_process(case["id"], "1")["stale"] == 1
