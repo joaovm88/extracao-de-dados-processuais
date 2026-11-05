@@ -14,6 +14,13 @@ O relatório é **por caso** (devedor/grupo): uma única planilha com todos os p
 - Chegou parte nova num processo já **revisado**: ele fica "desatualizado" e suas edições são preservadas; "Refazer extração" reprocessa tudo (descarta as edições).
 - Validado com os 5 PDFs de um processo físico (204 páginas): 1 processo, 1 chamada ao LLM, contexto com as 204 páginas em ordem.
 
+## Planilha-modelo do caso (opcional)
+Em vez do layout padrão, importe a **planilha do próprio caso** (.xlsx). O relatório final é uma **cópia dela, preenchida**:
+- Abas reconhecidas (Relatório, Execuções Fiscais, Outras Ações, Embargos, Outros Bens, Alegações de Fraude) são preenchidas pelo texto do cabeçalho; as demais (DJE-SDJ/SIEF, Mcfly, Recuperação Judicial, Filtros…) voltam **intactas**.
+- Processo que já tem linha: só as **células vazias** são preenchidas. Processo novo: linha acrescentada ao final.
+- A tela avisa colunas não reconhecidas (ficam em branco), abas com layout diferente (ex.: Outros Bens em blocos por matrícula) e abas que o modelo não tem.
+- O Mcfly é importado em separado (export do SAJ). Ao salvar, o openpyxl pode perder elementos avançados (gráficos, imagens); fórmulas e formatação comuns são mantidas.
+
 ## Fluxo de trabalho
 1. **Criar um caso** (um devedor / grupo econômico).
 2. **Importar o Mcfly** (`.xlsx`): preenche a capa (polos, classe, juízo, procuradoria, inscrições, data do protocolo) e define, pela *classe*, qual aba e qual prompt valem para cada processo.

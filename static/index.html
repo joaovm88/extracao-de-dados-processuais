@@ -28,9 +28,13 @@
   <h1 id="case-title"></h1>
   <div class="grid">
     <section class="card">
-      <h2>1. Cadastro dos processos (Mcfly)</h2>
+      <h2>1. Cadastro dos processos (export do Mcfly)</h2>
       <p class="hint">Importe o export do Mcfly: preenche capa, polos, classe, juízo e inscrições, e define o modelo de relatório de cada processo.</p>
       <input type="file" id="mcfly" accept=".xlsx"> <button class="btn" id="mcfly-btn">Importar</button>
+      <h2>Planilha-modelo do caso <small>(opcional)</small></h2>
+      <p class="hint">Importe a planilha do caso (.xlsx). O relatório final será uma <b>cópia dela, preenchida</b>: abas e colunas reconhecidas são preenchidas, as demais voltam intactas. Linhas que já existem só recebem as células vazias.</p>
+      <input type="file" id="tpl" accept=".xlsx"> <button class="btn" id="tpl-btn">Importar modelo</button> <button class="btn" id="tpl-del" hidden>Remover modelo</button>
+      <div id="tpl-report" class="hint" role="status"></div>
       <h2>2. PDFs dos processos</h2>
       <p class="hint">Pode enviar várias partes do mesmo processo (volumes, <code>PARTE_2</code>): elas viram <b>uma só linha</b> no relatório. O nº do processo, o volume e a página inicial são lidos do nome do arquivo (ex.: <code>0341609-70.2005.8.13.0261_V001_001-151-180.pdf</code>).</p>
       <div class="grid2">

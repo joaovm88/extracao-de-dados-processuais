@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from . import rag
 from .config import Settings
+from . import template as tpl
 from .export import build_case_xlsx
 from .llm import get_llm
 from .ingest.citation import parse_filename
@@ -178,10 +179,40 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             db.upsert_process(cid, r["numero"], r)
         return {"importados": len(rows)}
 
+    def _tpl_path(cid: str) -> Path:
+        d = s.data_dir / "templates"
+        d.mkdir(parents=True, exist_ok=True)
+        return d / f"{cid}.xlsx"
+
+    @app.post("/api/cases/{cid}/template")
+    async def upload_template(cid: str, file: UploadFile = File(...)):
+        """Planilha-modelo do caso: o relatório final é uma cópia dela, preenchida."""
+        _case(cid)
+        data = await file.read()
+        try:
+            analysis = tpl.analyze(data)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Planilha inválida: {e}")
+        _tpl_path(cid).write_bytes(data)
+        return analysis
+
+    @app.get("/api/cases/{cid}/template")
+    def get_template(cid: str):
+        _case(cid)
+        p = _tpl_path(cid)
+        return {"ativo": p.exists(), **(tpl.analyze(p.read_bytes()) if p.exists() else {})}
+
+    @app.delete("/api/cases/{cid}/template")
+    def delete_template(cid: str):
+        _case(cid)
+        _tpl_path(cid).unlink(missing_ok=True)
+        return {"ativo": False}
+
     @app.get("/api/cases/{cid}/spreadsheet")
     def case_spreadsheet(cid: str):
         c = _case(cid)
-        data = build_case_xlsx(c, db.list_processes(cid))
+        procs = db.list_processes(cid)
+        data = tpl.fill(_tpl_path(cid).read_bytes(), procs) if _tpl_path(cid).exists() else build_case_xlsx(c, procs)
         return Response(data, media_type=XLSX,
                         headers={"Content-Disposition": f'attachment; filename="Relatorio - {c["nome"]}.xlsx"'.encode("latin-1", "replace").decode("latin-1")})
 

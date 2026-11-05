@@ -21,12 +21,21 @@ async function openCase(id) {
   caseId = id; selProc = null;
   $('view-cases').classList.add('hidden'); $('view-case').classList.remove('hidden');
   $('export').href = `/api/cases/${id}/spreadsheet`;
+  api(`/api/cases/${id}/template`).then(showTemplate).catch(() => {});
   await refreshCase(); clearInterval(timer); timer = setInterval(refreshCase, 2500);
 }
 function home() { clearInterval(timer); caseId = null; $('view-case').classList.add('hidden'); $('view-cases').classList.remove('hidden'); $('crumb').textContent = ''; loadCases(); }
 const stTag = d => !d ? '<span class="tag">sem PDF</span>' : d.status === 'done' ? '<span class="tag ok">concluído</span>'
   : d.status === 'error' ? `<span class="tag err" title="${esc(d.error)}">erro</span>`
   : `<span class="tag warn">${d.status}</span><div class="bar"><i style="width:${d.pages_total ? 100 * d.pages_done / d.pages_total : 0}%"></i></div>`;
+function showTemplate(t) {
+  $('tpl-del').hidden = !t.ativo;
+  if (!t.ativo) { $('tpl-report').innerHTML = 'Sem modelo: será usado o layout padrão.'; return; }
+  const abas = (t.abas || []).map(a => a.preenchida
+    ? `<li>✔ <b>${esc(a.aba)}</b>: ${a.reconhecidas.length} coluna(s) reconhecida(s)${a.nao_reconhecidas.length ? `<br><span class="tag warn">Não reconhecidas (ficarão em branco)</span> ${esc(a.nao_reconhecidas.join(' · '))}` : ''}</li>`
+    : `<li><span class="tag warn">Atenção</span> <b>${esc(a.aba)}</b>: ${esc(a.motivo)}</li>`).join('');
+  $('tpl-report').innerHTML = `<ul class="t">${abas}</ul>` + ((t.ausentes || []).length ? `<p><span class="tag warn">Atenção</span> O modelo não tem a(s) aba(s): ${esc(t.ausentes.join(', '))}. Processos desse tipo aparecem só no Relatório.</p>` : '') + ((t.ignoradas || []).length ? `<p>Voltam intactas: ${esc(t.ignoradas.join(', '))}.</p>` : '');
+}
 const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], aguardando: ['warn', 'aguardando PDFs'],
   desatualizado: ['warn', 'novas partes: reextrair'], erro: ['err', 'erro'], sem_pdf: ['', 'sem PDF']};
 let lastCase = null;
@@ -90,6 +99,11 @@ $('mcfly-btn').onclick = async () => {
   const f = $('mcfly').files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f);
   try { const r = await api(`/api/cases/${caseId}/mcfly`, {method: 'POST', body: fd}); $('msg').textContent = `${r.importados} processos importados.`; refreshCase(); } catch (e) { $('msg').textContent = e.message; }
 };
+$('tpl-btn').onclick = async () => {
+  const f = $('tpl').files[0]; if (!f) return; const fd = new FormData(); fd.append('file', f);
+  try { const r = await api(`/api/cases/${caseId}/template`, {method: 'POST', body: fd}); showTemplate({...r, ativo: true}); } catch (e) { $('tpl-report').textContent = e.message; }
+};
+$('tpl-del').onclick = async () => { showTemplate(await api(`/api/cases/${caseId}/template`, {method: 'DELETE'})); };
 $('pdfs-btn').onclick = async () => {
   const files = [...$('pdfs').files]; if (!files.length) return; $('msg').textContent = 'Enviando…';
   for (const f of files) { const fd = new FormData(); fd.append('file', f); fd.append('case_id', caseId); fd.append('tipo', $('tipo').value); fd.append('sistema', $('sistema').value);
