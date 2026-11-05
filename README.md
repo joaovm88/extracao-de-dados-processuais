@@ -71,7 +71,7 @@ python -m pytest
 ## Escolher o modelo do Gemini
 O Google retira modelos antigos para contas novas (ex.: `gemini-2.5-pro` respondeu "no longer available to new users"). O padrão do projeto é `gemini-3.1-pro-preview`; mude em `GEMINI_MODEL` no `.env`. Para listar os modelos que a **sua** chave enxerga (com o sistema parado):
 ```bash
-docker compose run --rm --no-deps api python -c "import os; from google import genai; [print(m.name) for m in genai.Client(api_key=os.environ['GEMINI_API_KEY']).models.list()]"
+docker compose run --rm --no-deps api python -c "import os; from google import genai; c = genai.Client(api_key=os.environ['GEMINI_API_KEY']); [print(m.name) for m in c.models.list()]"
 ```
 Use um nome da lista sem o prefixo `models/`. Modelos "preview" têm limites menores no nível gratuito.
 
