@@ -120,6 +120,61 @@ def select_context_eventos(pages: list[dict], eventos: list[dict], budget: int) 
     return ctx, info
 
 
+def select_context_pje(pages: list[dict], docs: list[dict], budget: int) -> tuple[str, dict]:
+    """Contexto do PJe: índice completo de documentos (ID, data, nome) + texto integral dos relevantes. Autos digitalizados
+    ('Volume') ocupam o que sobrar do orçamento: início e, principalmente, as páginas mais recentes."""
+    from .ingest import pje
+    por_pg = {(p["doc_id"], p["page"]): p for p in pages}
+    ate_indice = len(pje.indice(docs, set()))
+    orcamento = max(budget - ate_indice - 6000, budget // 3)
+    com_texto: dict[str, str] = {}
+    usado, omitidos = 0, 0
+    volumes = [d for d in docs if pje.e_volume(d) and len(d["paginas"]) > 3]
+    for nivel in ("alta", "media"):
+        for d in [x for x in docs if pje.relevancia(x) == nivel and x not in volumes]:
+            texto = "\n\n".join(f"=== [{p['label']}] ===\n{p['text']}" for dp in d["paginas"] if (p := por_pg.get(tuple(dp))))[:9000]
+            if not texto:
+                continue
+            if usado + len(texto) > orcamento:
+                omitidos += nivel == "alta"
+                continue
+            com_texto[d["id"]] = texto
+            usado += len(texto)
+    paginas_vol = 0
+    for d in volumes:
+        pgs = [p for dp in d["paginas"] if (p := por_pg.get(tuple(dp))) and len(p["text"].strip()) >= 80]
+        sobra = max(orcamento - usado, 0)
+        escolhidas = set(range(min(3, len(pgs))))
+        gasto = sum(len(pgs[i]["text"]) for i in escolhidas)
+        for i in range(len(pgs) - 1, -1, -1):  # preenche com as páginas mais recentes
+            if gasto + len(pgs[i]["text"]) > sobra:
+                break
+            if i not in escolhidas:
+                escolhidas.add(i); gasto += len(pgs[i]["text"])
+        if len(escolhidas) < len(pgs):
+            omitidos += 1
+        com_texto[d["id"]] = "\n\n".join(f"=== [{pgs[i]['label']}] ===\n{pgs[i]['text']}" for i in sorted(escolhidas))
+        usado += gasto
+        paginas_vol += len(escolhidas)
+    capa = []
+    for p in pages:  # capa: páginas antes do primeiro rodapé de documento
+        if p.get("refs", {}).get("pje"):
+            break
+        capa.append(f"=== [{p['label']}] ===\n{p['text']}")
+    capa = capa[:2]
+    ordem = [d["id"] for d in docs if d["id"] in com_texto]
+    ctx = ("ÍNDICE COMPLETO DE DOCUMENTOS (fonte: capa do PJe; 'texto integral: sim' = o documento vem transcrito abaixo)\n"
+           + pje.indice(docs, set(com_texto)) + ("\n\nCAPA DO PROCESSO\n" + "\n\n".join(capa) if capa else "")
+           + "\n\nTEXTO DOS DOCUMENTOS\n" + "\n\n".join(com_texto[i] for i in ordem))
+    enviadas = paginas_vol + sum(len(d["paginas"]) for d in docs if d["id"] in com_texto and d not in volumes)
+    info = {"modo": "eventos", "sistema": "pje", "eventos_total": len(docs), "eventos_com_texto": len(com_texto),
+            "eventos_relevantes": sum(1 for d in docs if pje.relevancia(d) != "baixa"), "paginas_total": len(pages),
+            "paginas_enviadas": enviadas + len(capa), "paginas_omitidas": max(len(pages) - enviadas - len(capa), 0),
+            "caracteres_total": sum(len(p["text"]) for p in pages), "caracteres_enviados": len(ctx), "orcamento": budget,
+            "cortado": omitidos > 0, "atos_relevantes_omitidos": omitidos}
+    return ctx, info
+
+
 def citation_rule(sistema) -> str:
     if sistema == "eproc":
         return ("- SISTEMA: eproc. Cite os atos SOMENTE como 'Evento N, pg. P' (ou 'Evento N'). NUNCA use 'ID' nem 'VOL' neste processo, "
@@ -140,9 +195,14 @@ def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=
         + citation_rule(sistema) +
         "- Campos de lista fechada só aceitam os valores permitidos; se não houver base nos autos, use null.\n"
         f"- Nunca invente. Sem base no texto, use null (ou '{NAO_ENCONTRADO}' dentro de 'observacoes')."
+        + ("\n- O contexto começa com um ÍNDICE COMPLETO DE DOCUMENTOS, tirado da capa do PJe: é a fonte AUTORITATIVA do ID, da data de assinatura e do nome de cada documento. "
+           "Só os documentos marcados 'texto integral: sim' vêm transcritos; para os demais NÃO presuma o conteúdo: descreva só o que o índice informa ou omita. "
+           "Documentos do tipo 'Volume' são os autos físicos digitalizados: dentro deles, cada ato (despacho, mandado, certidão…) tem a data que consta no próprio texto. "
+           "Na cronologia, escreva cada ato como 'ID N, pg. P - dd/mm/aaaa - descrição', onde N é o ID do documento e P a página dentro dele (rótulo do trecho)."
+           if com_indice and sistema == "pje" else "")
         + ("\n- O contexto começa com um ÍNDICE COMPLETO DE EVENTOS, que vem do próprio sistema (eproc) e é a fonte AUTORITATIVA do número, da data e do tipo de cada evento. "
            "Só os atos marcados 'texto integral: sim' vêm transcritos; para os demais NÃO presuma o conteúdo: descreva apenas o que o índice informa ou omita o ato. "
-           "Na cronologia, cite cada ato como 'Evento N, pg. P' e use a data do índice." if com_indice else "")
+           "Na cronologia, cite cada ato como 'Evento N, pg. P' e use a data do índice." if com_indice and sistema != "pje" else "")
     )
     return validate(sheet, llm.extract(system, f"Processo para análise:\n\n{context}", tool_schema(sheet)))
 

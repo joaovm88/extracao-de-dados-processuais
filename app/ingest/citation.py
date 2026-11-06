@@ -7,6 +7,7 @@ from .eventos import parse_separator
 # Nome do arquivo ex.: 0341609-70.2005.8.13.0261_V001_001-151-180.pdf
 _CNJ = re.compile(r"(\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})")
 _VOL = re.compile(r"_V(\d+)")
+_VOL_RANGE = re.compile(r"_(\d{1,3})-(\d+)-(\d+)\.pdf$", re.IGNORECASE)  # ex.: ..._1-91-180.pdf = volume 1, págs. 91 a 180
 _RANGE = re.compile(r"(\d+)-(\d+)(?=\.pdf$|$)", re.IGNORECASE)
 
 _ID = re.compile(r"\bNum\.\s*(\d{6,})\s*-\s*P[áa]g\.\s*(\d+)")  # rodapé PJe: ID do documento + página nele
@@ -29,9 +30,14 @@ def parse_filename(name: str) -> dict:
     vol = _VOL.search(stem)
     rng = _RANGE.search(stem) if vol else None
     first = int(rng.group(1)) if rng and int(rng.group(1)) <= int(rng.group(2)) else None
+    vr = None if vol else _VOL_RANGE.search(stem)
+    if vr and int(vr.group(2)) <= int(vr.group(3)):
+        vol_n, first = int(vr.group(1)), int(vr.group(2))
+    else:
+        vol_n = int(vol.group(1)) if vol else None
     evt = _EVT_FILE.search(stem)
     return {"numero_processo": cnj.group(1) if cnj else None,
-            "volume": int(vol.group(1)) if vol else None,
+            "volume": vol_n,
             "pagina_inicial": first,
             "evento": evt.group(1) if evt else None,
             "parte": int(pt.group(1)) if (pt := _PARTE.search(stem)) else None}
@@ -99,7 +105,7 @@ def label(volume: Optional[int], page: int, refs: Optional[dict] = None, sistema
         parts.append(f"Evento {refs['evento']}")
     if sistema == "pje" and refs.get("id"):
         parts.append(f"ID {refs['id']}")
-    if volume is not None:
+    if volume is not None and sistema != "pje":
         parts.append(f"VOL {volume:03d}")
     parts.append(f"pg. {refs.get('pg') or page}" if sistema == "pje" else f"pg. {page}")
     if sistema is None and refs.get("id"):

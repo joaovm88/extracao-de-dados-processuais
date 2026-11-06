@@ -23,6 +23,7 @@ from .mcfly import read_mcfly
 from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
 from .ingest import eventos as ev
+from .ingest import pje
 from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, load_eventos, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -169,14 +170,19 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.get("/api/cases/{cid}/processes/{numero}/eventos")
     def process_events(cid: str, numero: str):
-        """Linha do tempo fixa do eproc (lida das páginas de separação do PDF): todos os eventos, sem IA."""
+        """Linha do tempo fixa (eproc: páginas de separação; PJe: índice da capa e rodapés), sem IA."""
         if not db.get_process(cid, numero):
             raise HTTPException(404, "Processo não encontrado.")
         evs = load_eventos(s, db.docs_for_process(cid, numero))
-        return {"total": len(evs), "eventos": [
-            {**{k: e[k] for k in ("evento", "data", "hora", "movimento", "tipo_documento", "usuario", "complemento", "docs")},
-             "data_fmt": ev.fmt_data(e["data"]), "paginas": len(e["paginas"]), "relevancia": ev.relevancia(e), "linha": ev.linha_base(e)}
-            for e in evs]}
+        def item(e):
+            if "evento" not in e:  # PJe: documento identificado pelo ID
+                return {"evento": e["id"], "rotulo": f"ID {e['id']}", "data": e["data"], "hora": e["hora"], "movimento": e["movimento"],
+                        "tipo_documento": e["tipo_documento"], "usuario": e["usuario"], "complemento": "", "docs": [],
+                        "data_fmt": ev.fmt_data(e["data"]), "paginas": len(e["paginas"]), "relevancia": pje.relevancia(e), "linha": pje.linha_base(e)}
+            return {**{k: e[k] for k in ("evento", "data", "hora", "movimento", "tipo_documento", "usuario", "complemento", "docs")},
+                    "rotulo": f"Evento {e['evento']}", "data_fmt": ev.fmt_data(e["data"]), "paginas": len(e["paginas"]),
+                    "relevancia": ev.relevancia(e), "linha": ev.linha_base(e)}
+        return {"total": len(evs), "eventos": [item(e) for e in evs]}
 
     @app.get("/api/cases/{cid}/processes/{numero}")
     def get_process(cid: str, numero: str):

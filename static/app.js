@@ -227,7 +227,7 @@ function openLong(numero, key) {
   const c = l.medidas?.contexto, cr = l.cronologia;
   const corte = key !== 'observacoes' || !c?.cortado ? '' : c.modo === 'eventos' ? `⚠ ${c.atos_relevantes_omitidos} ato(s) relevante(s) ficaram sem o texto integral por falta de espaço: a cronologia pode estar incompleta. `
     : `⚠ A IA viu ${c.paginas_enviadas} de ${c.paginas_total} páginas deste processo: a cronologia pode estar incompleta. `;
-  const conf = key === 'observacoes' && cr ? `Cronologia conferida com os ${cr.eventos_base} eventos do eproc${cr.datas_corrigidas ? `: ${cr.datas_corrigidas} data(s) corrigida(s) pelo sistema` : ''}${cr.inexistentes.length ? `; ⚠ evento(s) que não existem: ${cr.inexistentes.join(', ')}` : ''}. ` : '';
+  const conf = key === 'observacoes' && cr ? `Cronologia conferida com os ${cr.eventos_base} ${l.sistema === 'pje' ? 'documentos do índice do PJe' : 'eventos do eproc'}${cr.datas_corrigidas ? `: ${cr.datas_corrigidas} data(s) corrigida(s) pelo sistema` : ''}${cr.inexistentes.length ? `; ⚠ ato(s) que não existem: ${cr.inexistentes.join(', ')}` : ''}. ` : '';
   $('notes-cit').textContent = corte + conf + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
 }
 $('notes-fmt').onclick = async () => {
@@ -323,12 +323,12 @@ async function openEventos(numero) {
 }
 function evFiltrados() {
   const t = norm($('ev-q').value).split(/\s+/).filter(Boolean), so = $('ev-rel').checked;
-  return evCache.lista.filter(e => (!so || e.relevancia !== 'baixa') && t.every(x => norm(`${e.evento} ${e.data_fmt} ${e.movimento} ${e.tipo_documento} ${e.complemento} ${e.docs.join(' ')}`).includes(x)));
+  return evCache.lista.filter(e => (!so || e.relevancia !== 'baixa') && t.every(x => norm(`${e.rotulo} ${e.data_fmt} ${e.movimento} ${e.tipo_documento} ${e.complemento} ${e.docs.join(' ')}`).includes(x)));
 }
 function renderEventos() {
   const L = evFiltrados(); $('ev-count').textContent = `${L.length} de ${evCache.lista.length} evento(s)`;
   $('ev-tab').tBodies[0].innerHTML = L.map(e => { const [c, t] = REL[e.relevancia];
-    return `<tr><td><span class="num">${e.evento}</span></td><td>${esc(e.data_fmt)}</td><td>${esc(e.movimento || e.tipo_documento)}${e.complemento ? `<div class="muted">${esc(e.complemento)}</div>` : ''}</td>
+    return `<tr><td><span class="num">${esc(String(e.evento))}</span></td><td>${esc(e.data_fmt)}</td><td>${esc(e.movimento || e.tipo_documento)}${e.complemento ? `<div class="muted">${esc(e.complemento)}</div>` : ''}</td>
       <td>${esc(e.docs.join(', ') || '—')}</td><td>${e.paginas || '—'}</td><td><span class="tag ${c}">${t}</span></td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nenhum evento com esse filtro.</td></tr>';
 }
 $('ev-q').oninput = renderEventos; $('ev-rel').onchange = renderEventos;

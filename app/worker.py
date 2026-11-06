@@ -13,6 +13,7 @@ from .config import Settings
 from .db import MetadataDB
 from .ingest import citation, entities
 from .ingest import eventos as ev
+from .ingest import pje
 from .ingest.chunker import chunk_page
 from .ingest.pdf import iter_pages, page_count
 from .llm import get_llm
@@ -58,12 +59,17 @@ def eventos_path(settings: Settings, doc_id: str):
 
 
 def load_eventos(settings: Settings, docs: list[dict]) -> list[dict]:
+    """Linha do tempo do processo: eventos do eproc ou documentos do PJe (um registro por ID), de todas as partes."""
     listas = []
     for d in docs:
         p = eventos_path(settings, d["id"])
         if p.exists():
             listas.append(json.loads(p.read_text(encoding="utf-8")))
-    return ev.merge_events(listas) if listas else []
+    if not listas:
+        return []
+    if any(r.get("id") and "evento" not in r for l in listas for r in l):
+        return pje.merge_docs(listas)
+    return ev.merge_events(listas)
 
 
 def _resolve_numero(db: MetadataDB, doc: dict, meta: dict) -> Optional[str]:
@@ -134,7 +140,8 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         classe = doc.get("classe") or next(
             (c for c in (citation.classe_from_text(p["text"]) for p in pages[:6]) if c), "")
         pages_path(settings, doc_id).write_text(json.dumps(pages, ensure_ascii=False), encoding="utf-8")
-        eventos_doc = ev.extract_events(pages, doc_id) if sistema == "eproc" else []  # linha do tempo fixa, lida do próprio PDF
+        eventos_doc = (ev.extract_events(pages, doc_id) if sistema == "eproc"
+                       else pje.extract_docs(pages, doc_id) if sistema == "pje" else [])  # linha do tempo fixa, lida do próprio PDF
         eventos_path(settings, doc_id).write_text(json.dumps(eventos_doc, ensure_ascii=False), encoding="utf-8")
         meta["n_eventos"] = len(eventos_doc)
         db.update(doc_id, status="done", pages_done=total, pages_ocr=ocr_pages, metadata=meta,
@@ -185,8 +192,10 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
         llm = llm_client or get_llm(settings)
         if llm is not None:
             evs = load_eventos(settings, docs)
-            usar_eventos = sistema == "eproc" and sum(1 for e in evs if e["data"]) >= 3  # PJe/digitalizados: contexto por páginas, como antes
-            if usar_eventos:
+            usar_eventos = sistema in ("eproc", "pje") and sum(1 for e in evs if e["data"]) >= 3  # digitalizados sem sistema: contexto por páginas
+            if usar_eventos and sistema == "pje":
+                context, info = ex.select_context_pje(pages, evs, settings.context_budget_chars)
+            elif usar_eventos:
                 context, info = ex.select_context_eventos(pages, evs, settings.context_budget_chars)
             else:
                 context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
@@ -199,7 +208,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
                           revisar=out["_revisar"], modo="llm", provedor=llm.name)
             if usar_eventos:  # confere a cronologia da IA com os eventos reais: data do eproc, ordem e eventos inexistentes
-                obs, crono = ev.validar_cronologia(result["fields"].get("observacoes"), evs)
+                obs, crono = (pje if sistema == "pje" else ev).validar_cronologia(result["fields"].get("observacoes"), evs)
                 result["fields"]["observacoes"] = obs
                 result["cronologia"] = {**crono, "eventos_base": len(evs)}
             texts = [str(v) for v in result["fields"].values() if v] + list(result["citacoes"].values())
