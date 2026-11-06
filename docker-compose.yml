@@ -16,7 +16,7 @@ services:
     build: .
     environment: *env
     ports: ["8000:8000"]
-    volumes: ["data:/data"]
+    volumes: ["data:/data", "./prompts:/srv/prompts:ro"]   # prompts editáveis sem rebuild: edite e use "Refazer extração"
     restart: on-failure
     depends_on:
       redis: { condition: service_started }
@@ -25,7 +25,7 @@ services:
     build: .
     command: python -m app.run_worker
     environment: *env
-    volumes: ["data:/data"]
+    volumes: ["data:/data", "./prompts:/srv/prompts:ro"]   # prompts editáveis sem rebuild: edite e use "Refazer extração"
     restart: on-failure
     depends_on:
       redis: { condition: service_started }

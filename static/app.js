@@ -224,7 +224,8 @@ let longFor = null;
 function openLong(numero, key) {
   const l = row(numero); if (!l || !editable(l)) return; const col = data.abas.flatMap(a => a.colunas).find(c => c.key === key);
   longFor = {numero, key}; $('notes-title').textContent = col ? col.titulo : 'Texto'; $('notes-sub').textContent = numero; $('notes-text').value = l.valores[key] ?? '';
-  $('notes-cit').textContent = l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''; $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
+  const c = l.medidas?.contexto, corte = key === 'observacoes' && c?.cortado ? `⚠ A IA viu ${c.paginas_enviadas} de ${c.paginas_total} páginas deste processo: a cronologia pode estar incompleta. ` : '';
+  $('notes-cit').textContent = corte + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
 }
 $('notes-fmt').onclick = async () => {
   try { const r = await api('/api/format/corresponsaveis', json('POST', {texto: $('notes-text').value})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }

@@ -47,7 +47,7 @@ Em vez do layout padrão, importe a **planilha do próprio caso** (.xlsx). O rel
 - **DJE-SDJ / DJE-SIEF**: criadas só com cabeçalho; são preenchidas por outro setor.
 - **Outros Bens**: imóveis/veículos dados em garantia nas execuções (extraídos por IA).
 - **Alegações de Fraude**: só quando o procurador alegou e o juiz deferiu/analisou.
-- Os prompts são arquivos `.md` editáveis; o layout das abas e as **listas fechadas** ficam em `app/schemas.py`.
+- **Execução Fiscal** gera só a **cronologia dos atos** (uma linha por ato: origem, data e descrição). Os prompts ficam em `prompts/*.md` e, no Docker, a pasta é montada: **edite o arquivo e use "Refazer extração"**, sem rebuild. Os prompts são arquivos `.md` editáveis; o layout das abas e as **listas fechadas** ficam em `app/schemas.py`.
 
 ## Citações: Evento (eproc) x ID (PJe)
 - **eproc** cita `Evento N, pg. P`; **PJe** cita `ID N, pg. P` (ID do documento e página *dentro* dele, lida do rodapé `Num. X - Pág. N`). O sistema é detectado pelos marcadores do PDF ou informado no envio.

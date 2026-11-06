@@ -151,7 +151,7 @@ def test_case_flow_end_to_end(env):
     assert d["result"]["fields"]["garantia"] == "IMÓVEL" and d["result"]["modo"] == "llm"
     # páginas absolutas e rótulo no contexto enviado ao LLM
     assert "[VOL 001, pg. 152]" in llm.calls[0]["user"]
-    assert "Evento [Número], VOL [Número]" in llm.calls[0]["system"]
+    assert "[ORIGEM] - [dd/mm/aaaa]" in llm.calls[0]["system"]
     assert d["result"]["provedor"] == "fake" and d["result"]["citacoes"] == {"garantia": "VOL 001, pg. 2"}
 
     # revisão: lista fechada é imposta
@@ -317,7 +317,7 @@ def test_eproc_cites_evento_never_id_and_inherits_across_pages(env):
     ("apelacao", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
     ("agravo", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
     ("embargos", "embargos", "outras_acoes", "Relatório de Status Processual"),
-    ("execucao_fiscal", "execucoes_fiscais", "execucoes_fiscais", "Relatório de Status de Execução e Penhoras"),
+    ("execucao_fiscal", "execucoes_fiscais", "execucoes_fiscais", "Cronologia dos Atos Processuais"),
     ("outras_acoes", "outras_acoes", "outras_acoes", "Relatório de Status Processual"),
 ])
 def test_tipo_chosen_in_upload_selects_sheet_and_prompt(env, tipo, sheet, prompt, titulo):
@@ -777,3 +777,11 @@ def test_provider_reports_attempts_wait_and_model_that_answered(monkeypatch):
     g2 = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 99)), fallback_model="r")
     g2.extract("s", "u", schema)
     assert g2.last_call["modelo"] == "r" and g2.last_call["tentativas"] == 5 and g2.last_call["espera_s"] == 85.0
+
+
+def test_execucao_fiscal_prompt_is_chronology_only():
+    texto = ex.load_prompt("execucoes_fiscais")
+    for velho in ("Resumo de Bens e Valores Constritos", "Resumo de Defesas e Incidentes", "Expropriações e Leilões", "Próximo Passo do Processo"):
+        assert velho not in texto  # os quatro blocos de resumo saíram
+    assert "ordem cronológica crescente" in texto and "[ORIGEM] - [dd/mm/aaaa]" in texto
+    assert "Não informado no extrato" in texto and "mero expediente" in texto
