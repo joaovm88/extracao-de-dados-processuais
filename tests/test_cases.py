@@ -643,3 +643,34 @@ def test_chat_is_impatient_but_extraction_is_patient(monkeypatch):
     with pytest.raises(RuntimeError):
         GeminiProvider("k", "p", SimpleNamespace(models=m3)).generate("s", "u")
     assert len(m3.modelos) == 1 and esperas == []
+
+
+def test_corresponsaveis_are_formatted_one_per_line_with_cpf_or_cnpj():
+    f = ex.format_corresponsaveis
+    esperado = "João Victor - CPF: 529.982.247-25\nBETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81"
+    assert f("João Victor - CPF: 529.982.247-25\nBETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81") == esperado  # já no formato
+    assert f("João Victor (CPF 52998224725); BETA COMERCIO LTDA, inscrita no CNPJ sob o nº 11222333000181") == esperado  # texto corrido, só números
+    assert f("1. João Victor - 529.982.247-25\n2) BETA COMERCIO LTDA CNPJ/MF 11.222.333/0001-81") == esperado  # numeração e rótulos
+    assert f("• João Victor – CPF: 529.982.247-25\n- BETA COMERCIO LTDA – CNPJ: 11.222.333/0001-81") == esperado  # marcadores
+    assert f(["João Victor 529.982.247-25", "BETA COMERCIO LTDA 11.222.333/0001-81"]) == esperado  # lista JSON
+    assert f("João Victor - CPF: 529.982.247-25\nJoão Victor, CPF 529.982.247-25") == "João Victor - CPF: 529.982.247-25"  # repetido
+    assert f("João Victor - CPF: 529.982.247-26") == "João Victor - CPF: 529.982.247-26 (conferir dígitos)"  # dígito inválido
+    assert f("Maria Souza\nBETA LTDA - 11.222.333/0001-81") == "Maria Souza - documento não informado\nBETA LTDA - CNPJ: 11.222.333/0001-81"
+    assert f("11.222.333/0001-81") == "(nome não informado) - CNPJ: 11.222.333/0001-81"
+    assert f("Não há pedido de redirecionamento") == "Não há pedido de redirecionamento"  # sem documento: não mexe
+    assert f(None) is None and f("   ") is None and f([]) is None
+
+
+def test_validate_applies_corresponsaveis_format_to_llm_output():
+    out = ex.validate(SHEETS["execucoes_fiscais"], {"observacoes": "x", "redirecionamento": "SIM",
+                      "corresponsaveis": "João Victor CPF 52998224725; BETA LTDA CNPJ 11222333000181"})
+    assert out["corresponsaveis"] == "João Victor - CPF: 529.982.247-25\nBETA LTDA - CNPJ: 11.222.333/0001-81"
+    assert "UMA pessoa ou empresa POR LINHA" in ex.tool_schema(SHEETS["execucoes_fiscais"])["properties"]["corresponsaveis"]["description"]
+
+
+def test_corresponsaveis_several_people_on_the_same_line():
+    f = ex.format_corresponsaveis
+    texto = "BETA COMERCIO LTDA, inscrita no CNPJ sob o nº 11222333000181; João Victor (CPF 52998224725) e MARIA SOUZA - 987.654.321-00"
+    assert f(texto) == ("BETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81\nJoão Victor - CPF: 529.982.247-25\nMARIA SOUZA - CPF: 987.654.321-00")
+    assert f("Ana (CPF 52998224725), Bruno (CPF 11144477735) e Carla CNPJ 11222333000181") == (
+        "Ana - CPF: 529.982.247-25\nBruno - CPF: 111.444.777-35\nCarla - CNPJ: 11.222.333/0001-81")

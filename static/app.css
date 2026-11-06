@@ -107,3 +107,6 @@ table.plain{font-size:13px}table.plain th{background:var(--bg);color:var(--muted
 .search input{border:0;background:none;padding:7px 0;outline:none;width:100%;color:var(--ink);font:inherit}.search:focus-within{border-color:var(--blue);box-shadow:0 0 0 2px var(--sel)}
 .filters select{width:auto;padding:7px 10px;border-radius:9px;border-color:var(--line)}
 mark{background:var(--yellow);color:#1b2430;border-radius:3px;padding:0 1px}
+.clamp.lista{display:block;white-space:normal;-webkit-line-clamp:unset;overflow:visible}.clamp.lista:empty::before{content:"Clique para escrever…";color:var(--muted)}
+.lista .li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}.lista .mais{color:var(--blue);font-size:12px;font-weight:600}
+#grid td:has(.lista){min-width:400px}

@@ -34,6 +34,10 @@ class ChatIn(BaseModel):
     doc_id: Optional[str] = None
 
 
+class TextIn(BaseModel):
+    texto: str
+
+
 class CaseIn(BaseModel):
     nome: str
 
@@ -84,6 +88,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": llm.name if llm else None}
+
+    @app.post("/api/format/corresponsaveis")
+    def format_corresponsaveis(body: TextIn):
+        """Padroniza uma lista de corresponsáveis (uma pessoa/empresa por linha, com CPF/CNPJ), sem gastar IA."""
+        from .extract import format_corresponsaveis as fmt
+
+        return {"texto": fmt(body.texto) or ""}
 
     @app.get("/api/tipos")
     def tipos():

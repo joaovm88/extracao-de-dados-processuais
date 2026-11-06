@@ -130,6 +130,10 @@ function cell(l, c, ed, waiting) {
   const v = l.valores[c.key] ?? '', tip = l.citacoes[c.key] ? ` title="Origem: ${esc(l.citacoes[c.key])}"` : '';
   if (c.fonte !== 'ai') return `<td class="c ro"${tip}>${esc(v)}</td>`;  // capa (Mcfly) e campos do sistema: somente leitura
   if (!ed) return `<td>${waiting ? '<div class="shim"></div>' : '<div class="wait">—</div>'}</td>`;
+  if (c.key === 'corresponsaveis') {  // lista: uma pessoa por linha, com CPF/CNPJ; o resto fica na janela
+    const ls = String(v).split('\n').filter(Boolean);
+    return `<td${tip}><div class="clamp lista" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar a lista inteira">${ls.slice(0, 3).map(x => `<div class="li">${esc(x)}</div>`).join('')}${ls.length > 3 ? `<div class="mais">+${ls.length - 3} na lista…</div>` : ''}</div></td>`;
+  }
   if (LONG.includes(c.key)) return `<td${tip}><div class="clamp" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar tudo">${esc(v)}</div></td>`;
   if (c.opcoes) return `<td${tip}><select data-k="${c.key}"><option value=""></option>${c.opcoes.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></td>`;
   return `<td${tip}><input type="text" data-k="${c.key}" value="${esc(v)}"></td>`;
@@ -172,8 +176,11 @@ let longFor = null;
 function openLong(numero, key) {
   const l = row(numero); if (!l || !editable(l)) return; const col = data.abas.flatMap(a => a.colunas).find(c => c.key === key);
   longFor = {numero, key}; $('notes-title').textContent = col ? col.titulo : 'Texto'; $('notes-sub').textContent = numero; $('notes-text').value = l.valores[key] ?? '';
-  $('notes-cit').textContent = l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''; $('dlg-notes').showModal(); $('notes-text').focus();
+  $('notes-cit').textContent = l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''; $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
 }
+$('notes-fmt').onclick = async () => {
+  try { const r = await api('/api/format/corresponsaveis', json('POST', {texto: $('notes-text').value})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }
+};
 $('notes-save').onclick = async () => { const f = longFor; await save(f.numero, f.key, $('notes-text').value, null); $('dlg-notes').close(); };
 
 /* ---------- painel do assistente (retrátil) ---------- */

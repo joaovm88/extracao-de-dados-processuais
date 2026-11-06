@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from .ingest.entities import valid_cnpj, valid_cpf
 from .schemas import NAO_ENCONTRADO, SHEETS, Sheet
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
@@ -107,6 +108,8 @@ def validate(sheet: Sheet, data: dict) -> dict:
         if f.options and v is not None and v not in f.options:
             review.append(f.key)
             data[f.key] = None
+    if "corresponsaveis" in data:
+        data["corresponsaveis"] = format_corresponsaveis(data.get("corresponsaveis"))
     data["_revisar"] = review
     data["bens"] = data.get("bens") or []
     data["fraudes"] = data.get("fraudes") or []
@@ -156,3 +159,65 @@ def check_citations(texts: list[str], pages: list[dict], sistema) -> list[str]:
             if not ok:
                 bad.append(f"{m.group(1)} {m.group(2).strip()}")
     return sorted(set(bad))
+
+
+_DOC = re.compile(r"(?<!\d)(\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}|\d{3}\.?\d{3}\.?\d{3}-?\d{2})(?!\d)")
+_BULLET = re.compile(r"^\s*(?:[-•*·–]+|\d{1,2}[.)])\s+")
+
+
+def _fmt_doc(d: str) -> tuple[str, str, bool]:
+    """(tipo, documento com máscara, dígitos válidos?) a partir de 11 (CPF) ou 14 (CNPJ) dígitos."""
+    n = re.sub(r"\D", "", d)
+    if len(n) == 14:
+        m = f"{n[:2]}.{n[2:5]}.{n[5:8]}/{n[8:12]}-{n[12:]}"
+        return "CNPJ", m, valid_cnpj(m)
+    m = f"{n[:3]}.{n[3:6]}.{n[6:9]}-{n[9:]}"
+    return "CPF", m, valid_cpf(m)
+
+
+def format_corresponsaveis(value) -> Optional[str]:
+    """Padroniza a lista de corresponsáveis: uma pessoa/empresa por linha, 'NOME - CPF: …' ou 'NOME - CNPJ: …'.
+    Aceita texto corrido, linhas com marcadores/numeração, ';' como separador, documento só com números ou lista JSON.
+    Documento com dígito verificador inválido (comum em erro de OCR) recebe '(conferir dígitos)'.
+    Sem nenhum documento no texto (ex.: 'Não há'), devolve o texto original."""
+    if value is None:
+        return None
+    itens = [str(x) for x in value] if isinstance(value, (list, tuple)) else re.split(r"[\n;]+", str(value))
+    itens = [i.strip() for i in itens if i and i.strip()]
+    if not itens:
+        return None
+    if not any(_DOC.search(i) for i in itens):
+        return "\n".join(itens)
+    # uma linha com vários documentos ("A (CPF x) e B - CNPJ y") vira um trecho por documento
+    trechos = []
+    for it in itens:
+        txt = _BULLET.sub("", it)
+        ms = list(_DOC.finditer(txt))
+        if len(ms) <= 1:
+            trechos.append(txt)
+            continue
+        ini = 0
+        for k, mm in enumerate(ms):
+            fecha = re.match(r"\s*\)", txt[mm.end():])  # o ')' que fecha "(CPF x)" fica com este trecho
+            fim = len(txt) if k == len(ms) - 1 else mm.end() + (fecha.end() if fecha else 0)
+            trechos.append(txt[ini:fim])
+            ini = fim
+    linhas, vistos = [], set()
+    for txt in trechos:
+        m = _DOC.search(txt)
+        if not m:
+            nome = re.sub(r"\s+", " ", txt).strip(" -–:,;()")
+            linhas.append(f"{nome} - documento não informado") if nome else None
+            continue
+        tipo, doc, ok = _fmt_doc(m.group(1))
+        chave = re.sub(r"\D", "", doc)
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        nome = txt[:m.start()] + " " + txt[m.end():]
+        nome = re.sub(r"(?i)\b(cpf|cnpj|c\.?p\.?f|c\.?n\.?p\.?j)(?:\s*/\s*(?:mf|mef|me))?\b\.?\s*[:/]?|\b(inscrit[oa]|sob o n[ºo°]?|n[ºo°])\b\.?", " ", nome)
+        nome = re.sub(r"\(\s*\)", " ", nome)  # parênteses que ficaram vazios
+        nome = re.sub(r"(?i)^\s*(?:e|and)\s+", "", re.sub(r"\s+", " ", nome).strip(" -–:,;()/"))
+        nome = nome.strip(" -–:,;()/")
+        linhas.append(f"{nome or '(nome não informado)'} - {tipo}: {doc}{'' if ok else ' (conferir dígitos)'}")
+    return "\n".join(linhas)

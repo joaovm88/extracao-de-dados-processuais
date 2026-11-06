@@ -291,3 +291,11 @@ def test_chat_returns_clear_message_when_llm_is_overloaded(tmp_path, monkeypatch
         r = c.post("/api/chat", json={"question": "Há bloqueio?", "case_id": case["id"], "numero": ps[0]["numero"]})
     assert r.status_code == 503
     assert "indisponível ou lento" in r.json()["detail"] and "Erro interno" not in r.json()["detail"]
+
+
+def test_format_corresponsaveis_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    with TestClient(create_app(Settings())) as c:
+        r = c.post("/api/format/corresponsaveis", json={"texto": "João Victor CPF 52998224725; BETA LTDA CNPJ 11222333000181"})
+        assert r.json()["texto"] == "João Victor - CPF: 529.982.247-25\nBETA LTDA - CNPJ: 11.222.333/0001-81"
+        assert c.post("/api/format/corresponsaveis", json={"texto": "  "}).json() == {"texto": ""}

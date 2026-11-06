@@ -52,7 +52,9 @@ SHEETS: dict[str, Sheet] = {
         Field("excecao_pendente", "EXCEÇÃO PRÉ-EXECUTIVIDADE pendente julgamento?", "", SIM_NAO),
         Field("arquivada_40", "Arquivada 40 LEF?", "Execução arquivada nos termos do art. 40 da LEF?", SIM_NAO),
         Field("redirecionamento", "Há pedido de redirecionamento? (Se sim preencher a próxima coluna)", "", SIM_NAO),
-        Field("corresponsaveis", "Corresponsáveis (Nome e CNPJ/CPF)", "Somente se houver pedido de redirecionamento."),
+        Field("corresponsaveis", "Corresponsáveis (Nome e CNPJ/CPF)",
+              "Somente se houver pedido de redirecionamento. UMA pessoa ou empresa POR LINHA, no formato 'NOME - CPF: 000.000.000-00' "
+              "ou 'NOME - CNPJ: 00.000.000/0000-00'. Sem documento nos autos: 'NOME - documento não informado'."),
         Field("observacoes", "Observações relavantes sobre o atual estágio da EF", _OBS_EF),
     ]),
     "outras_acoes": Sheet("outras_acoes", "Outras Ações", "outras_acoes", [
