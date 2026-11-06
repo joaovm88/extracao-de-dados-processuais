@@ -15,6 +15,12 @@ function toast(msg, kind = '') { const t = document.createElement('div'); t.clas
 let caseId = null, data = null, dataKey = '', aba = 'execucoes_fiscais', sel = null, timer = null, schema = {}, tplState = {ativo: false}, picked = [], dragging = false;
 let panelOpen = innerWidth > 900 ? store.get('painel') !== '0' : false;
 let filtro = {q: '', st: ''};
+// tamanhos ajustáveis (por caso, no navegador): larguras por aba/coluna, alturas por processo e densidade das linhas
+let tam = {larg: {}, alt: {}, dens: 'normal'};
+const defW = k => ({__first: 230, observacoes: 320, corresponsaveis: 380, inscricoes: 220, somatorio: 200}[k] ?? 150);
+const wOf = (a, k) => tam.larg[a]?.[k] ?? defW(k);
+function loadTam() { try { const t = JSON.parse(store.get('tam:' + caseId) || '{}'); tam = {larg: t.larg || {}, alt: t.alt || {}, dens: t.dens || 'normal'}; } catch (_) { tam = {larg: {}, alt: {}, dens: 'normal'}; } }
+const saveTam = () => store.set('tam:' + caseId, JSON.stringify(tam));
 const LONG = ['observacoes', 'corresponsaveis'];  // colunas de texto longo: abrem numa janela para ler/editar tudo
 const chats = {};  // histórico do assistente por processo (só nesta sessão do navegador)
 const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], aguardando: ['warn', 'aguardando PDFs'], desatualizado: ['warn', 'novas partes'], erro: ['err', 'erro'], sem_pdf: ['', 'sem PDF']};
@@ -32,7 +38,7 @@ async function loadCases(selectId) {
   document.querySelectorAll('#cases li[data-id]').forEach(li => { li.onclick = () => openCase(li.dataset.id); li.onkeydown = e => e.key === 'Enter' && openCase(li.dataset.id); });
 }
 async function openCase(id) {
-  caseId = id; sel = null; data = null; dataKey = ''; picked = []; renderPicked(); aba = 'execucoes_fiscais';
+  caseId = id; loadTam(); sel = null; data = null; dataKey = ''; picked = []; renderPicked(); aba = 'execucoes_fiscais';
   $('welcome').classList.add('hidden'); $('work').classList.remove('hidden'); $('case-switch').hidden = false;
   ['btn-upload', 'btn-tpl'].forEach(b => $(b).disabled = false); $('export').href = `/api/cases/${id}/spreadsheet`; $('export').removeAttribute('aria-disabled');
   $('case-select').value = id; applyPanel();
@@ -102,26 +108,34 @@ $('f-clear').onclick = () => { filtro = {q: '', st: ''}; $('f-q').value = ''; $(
 document.addEventListener('keydown', e => { if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.querySelector('dialog[open]') && caseId) { e.preventDefault(); $('f-q').focus(); } });
 
 /* ---------- planilha viva ---------- */
+function gridHead(keys, heads) {  // <colgroup> com as larguras + cabeçalho com alça de redimensionar
+  const ws = keys.map(k => wOf(aba, k)), t = $('grid');
+  t.style.width = ws.reduce((x, y) => x + y, 0) + 'px'; t.className = 'dens-' + tam.dens;
+  return `<colgroup>${keys.map((k, i) => `<col data-k="${k}" style="width:${ws[i]}px">`).join('')}</colgroup><thead><tr>${heads.map((h, i) =>
+    `<th${h.title ? ` title="${esc(h.title)}"` : ''}>${esc(h.text)}<span class="rz" data-rz="${keys[i]}" title="Arraste para ajustar a largura · duplo clique restaura"></span></th>`).join('')}</tr></thead>`;
+}
 function renderGrid() {
   const a = data.abas.find(x => x.key === aba), table = $('grid');
   const todas = data.linhas.filter(l => l.aba === aba), linhas = todas.filter(passa);
-  $('grid-empty').hidden = true;
+  $('grid-empty').hidden = true; applyDens();
   if (aba === 'bens' || aba === 'fraude') {
     const todos = aba === 'bens' ? data.bens : data.fraudes, items = todos.filter(passaItem); updateFilterUI(items.length, todos.length);
-    table.innerHTML = `<thead><tr><th style="min-width:230px;max-width:230px">Processo</th>${a.colunas.map(c => `<th>${esc(c.titulo)}</th>`).join('')}</tr></thead><tbody>${items.map(i =>
-      `<tr><td class="first"><span class="num">${esc(i.numero)}</span></td>${a.colunas.map(c => `<td class="c ro">${esc(i[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
+    table.innerHTML = gridHead(['__first', ...a.colunas.map(c => c.key)], [{text: 'Processo'}, ...a.colunas.map(c => ({text: c.titulo}))]) + `<tbody>${items.map(i =>
+      `<tr><td class="first"><div class="cc"><span class="num">${esc(i.numero)}</span></div></td>${a.colunas.map(c => `<td class="c ro"><div class="cc">${esc(i[c.key] ?? '')}</div></td>`).join('')}</tr>`).join('')}</tbody>`;
     if (!items.length) emptyGrid(todos.length ? 'Nenhum item corresponde ao filtro' : aba === 'bens' ? 'Nenhum bem extraído ainda' : 'Nenhuma alegação de fraude', todos.length ? 'Ajuste ou limpe o filtro acima.' : 'Os itens aparecem aqui quando a IA os encontra nos processos. Esta aba é somente leitura.');
     return;
   }
   updateFilterUI(linhas.length, todas.length);
   const cols = a.colunas.filter(c => c.key !== 'numero');
-  table.innerHTML = `<thead><tr><th>Processo</th>${cols.map(c => `<th title="${esc(c.titulo)}">${esc(c.titulo)}</th>`).join('')}</tr></thead><tbody>${linhas.map(l => {
+  table.innerHTML = gridHead(['__first', ...cols.map(c => c.key)], [{text: 'Processo'}, ...cols.map(c => ({text: c.titulo, title: c.titulo}))]) + `<tbody>${linhas.map(l => {
     const [cls, txt] = ESTADO[l.estado], ed = editable(l), waiting = ['extraindo', 'aguardando'].includes(l.estado);
     const rc = (l.numero === sel ? 'sel ' : '') + (l.estado === 'erro' ? 'bad' : ed && l.reviewed ? 'okrow' : ed ? 'pend' : '');
     const cut = l.medidas?.contexto?.cortado ? `<span class="tag warn" title="A IA viu ${l.medidas.contexto.paginas_enviadas} de ${l.medidas.contexto.paginas_total} páginas (limite de contexto)">cortado</span>` : '';
     const warn = l.citacoes_invalidas.length ? `<span class="tag err" title="Citações que não existem no PDF: ${esc(l.citacoes_invalidas.join('; '))}">⚠ citação</span>` : '';
-    return `<tr data-n="${esc(l.numero)}" class="${rc}"><td class="first"><span class="num">${esc(l.numero)}</span>
-      <div class="sub"><span class="tag ${cls}">${txt}</span>${cut}${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> revisado</label>` : ''}</div></td>
+    const h = tam.alt[l.numero];
+    return `<tr data-n="${esc(l.numero)}" class="${rc}"${h ? ` style="--rh:${h}px"` : ''}><td class="first"><div class="cc"><span class="num">${esc(l.numero)}</span>
+      <div class="sub"><span class="tag ${cls}">${txt}</span>${cut}${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> <span>revisado</span></label>` : ''}</div></div>
+      <span class="rzr" title="Arraste para ajustar a altura da linha · duplo clique restaura"></span></td>
       ${cols.map(c => cell(l, c, ed, waiting)).join('')}</tr>`;
   }).join('')}</tbody>`;
   if (!linhas.length) emptyGrid(todas.length ? 'Nenhum processo corresponde ao filtro' : 'Nenhum processo nesta aba', todas.length ? 'Ajuste ou limpe o filtro acima.' : 'Importe a planilha-modelo e envie PDFs (botão "Upload de Processo" no topo, ou arraste os arquivos para cá).');
@@ -129,16 +143,48 @@ function renderGrid() {
 function emptyGrid(t, p) { const g = $('grid-empty'); g.hidden = false; g.innerHTML = `<b>${esc(t)}</b>${esc(p)}`; }
 function cell(l, c, ed, waiting) {
   const v = l.valores[c.key] ?? '', tip = l.citacoes[c.key] ? ` title="Origem: ${esc(l.citacoes[c.key])}"` : '';
-  if (c.fonte !== 'ai') return `<td class="c ro"${tip}>${esc(v)}</td>`;  // capa (Mcfly) e campos do sistema: somente leitura
-  if (!ed) return `<td>${waiting ? '<div class="shim"></div>' : '<div class="wait">—</div>'}</td>`;
+  const W = (inner, cls = '') => `<td${cls ? ` class="${cls}"` : ''}${tip}><div class="cc">${inner}</div></td>`;
+  if (c.fonte !== 'ai') return W(esc(v), 'c ro');  // capa (Mcfly) e campos do sistema: somente leitura
+  if (!ed) return W(waiting ? '<div class="shim"></div>' : '<div class="wait">—</div>');
   if (c.key === 'corresponsaveis') {  // lista: uma pessoa por linha, com CPF/CNPJ; o resto fica na janela
     const ls = String(v).split('\n').filter(Boolean);
-    return `<td${tip}><div class="clamp lista" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar a lista inteira">${ls.slice(0, 3).map(x => `<div class="li">${esc(x)}</div>`).join('')}${ls.length > 3 ? `<div class="mais">+${ls.length - 3} na lista…</div>` : ''}</div></td>`;
+    return W(`<div class="clamp lista" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar a lista inteira">${ls.slice(0, 3).map(x => `<div class="li">${esc(x)}</div>`).join('')}${ls.length > 3 ? `<div class="mais">+${ls.length - 3} na lista…</div>` : ''}</div>`);
   }
-  if (LONG.includes(c.key)) return `<td${tip}><div class="clamp" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar tudo">${esc(v)}</div></td>`;
-  if (c.opcoes) return `<td${tip}><select data-k="${c.key}"><option value=""></option>${c.opcoes.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></td>`;
-  return `<td${tip}><input type="text" data-k="${c.key}" value="${esc(v)}"></td>`;
+  if (LONG.includes(c.key)) return W(`<div class="clamp" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar tudo">${esc(v)}</div>`);
+  if (c.opcoes) return W(`<select data-k="${c.key}"><option value=""></option>${c.opcoes.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`);
+  return W(`<input type="text" data-k="${c.key}" value="${esc(v)}">`);
 }
+
+/* ---------- ajustar tamanhos: arrastar a borda da coluna ou da linha ---------- */
+function applyDens() {
+  $('grid').className = 'dens-' + tam.dens;
+  document.querySelectorAll('#dens [data-d]').forEach(b => b.classList.toggle('on', b.dataset.d === tam.dens));
+}
+function drag(e, onMove, onEnd) {
+  e.preventDefault(); e.stopPropagation(); dragging = true; document.body.classList.add('resizing');
+  const mv = ev => onMove(ev), up = () => { window.removeEventListener('pointermove', mv); dragging = false; document.body.classList.remove('resizing'); onEnd(); };
+  window.addEventListener('pointermove', mv); window.addEventListener('pointerup', up, {once: true});
+}
+$('grid').addEventListener('pointerdown', e => {
+  const h = e.target.closest('.rz'), r = e.target.closest('.rzr');
+  if (h) {  // largura da coluna
+    const k = h.dataset.rz, col = $('grid').querySelector(`col[data-k="${k}"]`), x0 = e.clientX, w0 = col.getBoundingClientRect().width, t0 = parseFloat($('grid').style.width);
+    h.classList.add('on');
+    drag(e, ev => { const w = Math.round(Math.max(70, Math.min(900, w0 + ev.clientX - x0))); col.style.width = w + 'px'; $('grid').style.width = (t0 - w0 + w) + 'px'; (tam.larg[aba] ||= {})[k] = w; },
+      () => { h.classList.remove('on'); saveTam(); });
+  } else if (r) {  // altura da linha
+    const tr = r.closest('tr'), n = tr.dataset.n, y0 = e.clientY, h0 = tr.getBoundingClientRect().height;
+    drag(e, ev => { const alt = Math.round(Math.max(40, Math.min(700, h0 + ev.clientY - y0))); tr.style.setProperty('--rh', alt + 'px'); tam.alt[n] = alt; }, saveTam);
+  }
+});
+$('grid').addEventListener('dblclick', e => {  // duplo clique na alça: volta ao tamanho padrão
+  const h = e.target.closest('.rz'), r = e.target.closest('.rzr');
+  if (h && tam.larg[aba]) { delete tam.larg[aba][h.dataset.rz]; saveTam(); renderGrid(); }
+  if (r) { delete tam.alt[r.closest('tr').dataset.n]; saveTam(); renderGrid(); }
+});
+$('dens').onclick = e => { const b = e.target.closest('[data-d]'); if (!b) return; tam.dens = b.dataset.d; saveTam(); applyDens(); };
+$('tam-reset').onclick = () => { tam = {larg: {}, alt: {}, dens: 'normal'}; saveTam(); if (data) renderGrid(); toast('Tamanhos de colunas e linhas restaurados'); };
+
 async function save(numero, key, value, td) {
   const l = row(numero); if (!l) return;
   const prev = l.valores[key] ?? '', val = (value ?? '').trim();
@@ -163,6 +209,7 @@ $('grid').addEventListener('keydown', e => {
   if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-long]')) { e.preventDefault(); openLong(e.target.closest('tr').dataset.n, e.target.dataset.long); }
 });
 $('grid').addEventListener('click', e => {
+  if (e.target.closest('.rz,.rzr')) return;
   const tr = e.target.closest('tbody tr'); if (!tr || !tr.dataset.n) return;
   const lg = e.target.closest('[data-long]'); if (lg) openLong(tr.dataset.n, lg.dataset.long);
   if (e.target.closest('input[type=checkbox],label')) return;

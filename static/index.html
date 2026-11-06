@@ -54,6 +54,9 @@
         <label for="f-st" class="sr">Situação</label>
         <select id="f-st"><option value="">Todas as situações</option><option value="revisar">A revisar</option><option value="revisado">Revisados</option><option value="erro">Com erro</option><option value="andamento">Em andamento</option><option value="sem_pdf">Sem PDF</option></select>
         <span class="muted" id="f-count"></span><button class="btn sm" id="f-clear" hidden>Limpar filtro</button>
+        <span class="spacer"></span>
+        <div class="seg" id="dens" role="group" aria-label="Altura das linhas"><button type="button" data-d="compacto" title="Linhas baixas (uma linha de texto)">Compacto</button><button type="button" data-d="normal" title="Altura pelo conteúdo">Normal</button><button type="button" data-d="amplo" title="Mostra mais texto nas células">Amplo</button></div>
+        <button class="btn sm" id="tam-reset" title="Volta as larguras das colunas e as alturas das linhas ao padrão">↺ Tamanhos</button>
       </div>
       <div class="banner" id="banner" hidden></div>
       <div class="grid-wrap" id="grid-wrap"><table id="grid"></table><div class="grid-empty" id="grid-empty" hidden></div></div>
