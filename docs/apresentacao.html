@@ -37,7 +37,7 @@ ul.t{margin:0 0 8px 16px;padding:0}ul.t li{margin-bottom:4px}
 <!-- ================= PÁGINA 1 ================= -->
 <section class="page">
 <h1>Plano Executivo: Sistema de Análise e Ingestão de Processos Judiciais</h1>
-<p class="sub">Atualização do projeto: da proposta de arquitetura à plataforma que gera o relatório do analista</p>
+<p class="sub">Atualização do projeto: uma planilha viva por caso, com linha do tempo dos atos, cronologia conferida e medições de custo e tempo</p>
 
 <div class="cols">
 <div><h2>1. O que fizemos</h2>
@@ -50,7 +50,7 @@ ul.t{margin:0 0 8px 16px;padding:0}ul.t li{margin-bottom:4px}
 
 <h2>3. Desenho da Arquitetura</h2>
 <div class="diagram">
-<div class="box">Usuário / Front-end<small>Caso, importação do Mcfly, upload com tipo e sistema, revisão e chat</small></div><div class="arrow">↓</div>
+<div class="box">Usuário / Front-end<small>Planilha viva (70%) + assistente retrátil (30%): upload, revisão, filtros, chat e medições</small></div><div class="arrow">↓</div>
 <div class="box">API Backend (FastAPI)<small>Recepção, validação e orquestração</small></div><div class="arrow">↓</div>
 <div class="box y">Fila Assíncrona (Redis) + Workers<small>PDFs pesados não travam o sistema; vários workers em paralelo</small></div><div class="arrow">↓</div>
 <div class="box">Worker de Ingestão<small>Texto nato-digital + OCR (refaz o OCR se a camada de texto vier corrompida) + marcadores Evento/ID/página</small></div><div class="arrow">↓</div>
@@ -62,7 +62,7 @@ ul.t{margin:0 0 8px 16px;padding:0}ul.t li{margin-bottom:4px}
 <div class="box">Validação das citações + Revisão do analista<small>Evento/ID/página inexistentes são sinalizados; o analista confere e aprova cada processo</small></div><div class="arrow">↓</div>
 <div class="box y">Planilha única do caso (.xlsx) → Resposta auditável no chat<small>Uma linha por processo, no layout do modelo do analista</small></div>
 </div>
-<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 1 de 3</span></div>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 1 de 4</span></div>
 </section>
 
 <!-- ================= PÁGINA 2 ================= -->
@@ -89,7 +89,7 @@ ul.t{margin:0 0 8px 16px;padding:0}ul.t li{margin-bottom:4px}
 </ul>
 <p>O resultado é a <b>padronização do relatório</b> e a redução do tempo de cada processo, sem retirar o analista da decisão.</p>
 </div>
-<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 2 de 3</span></div>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 2 de 4</span></div>
 </section>
 
 <!-- ================= PÁGINA 3 ================= -->
@@ -99,30 +99,54 @@ ul.t{margin:0 0 8px 16px;padding:0}ul.t li{margin-bottom:4px}
 
 <h2>Já implementado</h2>
 <ul class="t">
-<li><span class="ok">Pronto</span> Cadastro por caso, importação do Mcfly e escolha do prompt pelo tipo do processo ou pela classe.</li>
-<li><span class="ok">Pronto</span> Ingestão assíncrona com OCR, detecção de texto corrompido e indexação híbrida.</li>
-<li><span class="ok">Pronto</span> Uma extração por processo juntando volumes e partes (testado com 5 volumes, 204 páginas, 1 chamada ao LLM).</li>
-<li><span class="ok">Pronto</span> Citações por sistema (eproc/PJe) e conferência automática; PDF completo do eproc validado com amostra real.</li>
-<li><span class="ok">Pronto</span> Revisão do analista, planilha única no layout do modelo, chatbot e integração com Gemini (AI Studio).</li>
+<li><span class="ok">Pronto</span> <b>Planilha do próprio analista como modelo:</b> o sistema lê as colunas e abas do .xlsx, preenche só células vazias e avisa sobre colunas que não reconhece (o cadastro do Mcfly foi substituído por isso).</li>
+<li><span class="ok">Pronto</span> <b>Interface em tela única:</b> tabela editável (70%) e assistente retrátil (30%), tema claro/escuro, filtros, colunas e linhas redimensionáveis, janelas para textos longos e lista de corresponsáveis (Nome – CPF/CNPJ).</li>
+<li><span class="ok">Pronto</span> <b>Ingestão assíncrona</b> com OCR (refeito quando o texto embutido vem corrompido), fila com recuperação de PDFs travados, reenvio e exclusão por PDF.</li>
+<li><span class="ok">Pronto</span> <b>Linha do tempo do eproc</b> lida das páginas de separação (2º grau e 1ª instância): índice completo de eventos, texto integral só dos atos relevantes e cronologia conferida (datas corrigidas, ordem, eventos inexistentes apontados).</li>
+<li><span class="ok">Pronto</span> <b>Linha do tempo do PJe</b> a partir do índice da capa e dos rodapés “Num. ID – Pág.”; autos digitalizados (Volume) tratados à parte. Validado com amostra real; falta testar com mais processos.</li>
+<li><span class="ok">Pronto</span> <b>Medições</b>: tokens, páginas enviadas à IA, cortes, tempos de leitura/OCR e de IA, tentativas e espera por limite de uso.</li>
+<li><span class="ok">Pronto</span> Integração com Gemini (AI Studio) com novas tentativas, modelo reserva e mensagens claras de erro; 80 testes automatizados.</li>
 </ul>
 
 <h2>Pendências e riscos</h2>
 <table>
 <tr><th>Item</th><th>Situação e ação</th></tr>
-<tr><td>Teste com a chave do Google</td><td><span class="wip">Pendente.</span> Os testes automatizados usam LLM simulado; falta medir a qualidade das extrações com a API real e confirmar o modelo disponível na conta.</td></tr>
-<tr><td>OCR em escala</td><td><span class="wip">Pendente.</span> Os autos digitalizados antigos têm texto embutido corrompido; o Tesseract real ainda não foi exercitado, só por simulação.</td></tr>
-<tr><td>Processo completo do PJe</td><td><span class="wip">Pendente.</span> Regras de detecção escritas pelo rodapé "Num. X - Pág. N"; falta validar com um PDF completo do PJe.</td></tr>
-<tr><td>Layout variável da planilha</td><td><span class="wip">Próximo passo.</span> Usar a planilha do próprio caso como modelo (abas como Recuperação Judicial e DJE com colunas diferentes).</td></tr>
-<tr><td>Confidencialidade (LGPD)</td><td><b>Atenção.</b> Não usar a camada gratuita do AI Studio com processos reais; confirmar nos termos da parceria que os dados não são usados para treinamento. Incluir login (SSO) antes de expor o sistema.</td></tr>
-<tr><td>Listas fechadas</td><td>Validar com o analista os valores de "EXIT. GARANTIA" (hoje só Imóvel e Bacen c/DJE vieram do modelo).</td></tr>
+<tr><td>Qualidade com dados reais</td><td><span class="wip">Em andamento.</span> Comparar a saída com os relatórios já feitos à mão em um lote de 20 a 30 processos (campos certos, citações válidas, cronologia completa).</td></tr>
+<tr><td>Limite de uso do Google</td><td><span class="wip">Em andamento.</span> O nível gratuito limita chamadas por dia e por minuto (e erros 503 em horários de pico). Para volume é preciso conta com faturamento e termos de dados definidos.</td></tr>
+<tr><td>OCR em escala</td><td><span class="wip">Em medição.</span> É a etapa mais lenta nos autos digitalizados; o tempo real aparece em Medições e orienta quantos workers usar.</td></tr>
+<tr><td>Confidencialidade (LGPD)</td><td><b>Atenção.</b> Não usar o nível gratuito com processos reais; confirmar nos termos da parceria que os dados não treinam modelos. Incluir login (SSO) e trilha de auditoria antes de expor o sistema.</td></tr>
+<tr><td>Chave de acesso</td><td><b>Atenção.</b> A chave da API foi exibida em tela durante os testes: deve ser revogada e recriada, e nunca versionada.</td></tr>
 </table>
 
 <h2>Plano sugerido</h2>
 <ul class="t">
-<li><b>Fase 1 (piloto):</b> subir o ambiente completo (Redis, Elasticsearch, Tesseract) e processar 3 a 5 processos reais já conhecidos, comparando com os relatórios feitos manualmente.</li>
-<li><b>Fase 2 (ajustes):</b> corrigir prompts, listas fechadas e regras de citação com base nas divergências; incluir PJe completo e planilha do caso como modelo.</li>
-<li><b>Fase 3 (produção):</b> autenticação, trilha de auditoria da revisão e monitoramento de custo e tempo por processo.</li>
+<li><b>Fase 1 (piloto):</b> 20 a 30 processos reais variados; medir tempo, tokens e acerto contra o relatório manual.</li>
+<li><b>Fase 2 (ajustes):</b> corrigir prompts, listas fechadas e regras com as divergências; decidir o modelo e o regime de custo.</li>
+<li><b>Fase 3 (produção):</b> autenticação, auditoria, monitoramento de custo e tempo por processo.</li>
 </ul>
-<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 3 de 3</span></div>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 3 de 4</span></div>
+</section>
+
+<!-- ================= PÁGINA 4 ================= -->
+<section class="page">
+<h1 style="font-size:23px">7. Como escalar: Minas Gerais e, depois, o Brasil</h1>
+<p class="sub" style="margin-bottom:6px">Roteiro em etapas; cada etapa só começa quando a anterior mostra resultado medido</p>
+<table>
+<tr><th>Etapa</th><th>Objetivo e entregas</th></tr>
+<tr><td>0. Piloto (equipe atual)</td><td>Provar ganho com números: tempo por processo, % de campos corretos, citações válidas. Gera o “conjunto de referência” (processos já analisados à mão) usado em todas as etapas.</td></tr>
+<tr><td>1. Minas Gerais</td><td>Login institucional, perfis por procuradoria, trilha de auditoria, banco e arquivos em infraestrutura gerenciada, vários workers, monitoramento, faturamento do modelo de IA e acordo de tratamento de dados.</td></tr>
+<tr><td>2. Vários sistemas e tribunais</td><td>Um adaptador por sistema processual (eproc e PJe já feitos; mapear e-SAJ, Projudi e outros). A linha do tempo de cada sistema alimenta o mesmo motor de extração.</td></tr>
+<tr><td>3. Brasil</td><td>Implantação por regiões/unidades, painel de custos e qualidade, biblioteca nacional de prompts versionados, suporte e treinamento.</td></tr>
+</table>
+<div class="result">
+<h2>Pontos de decisão para a direção</h2>
+<ul>
+<li>Onde rodar: <span>nuvem institucional ou infraestrutura própria, e qual provedor de IA com garantia de que os dados não treinam modelos.</span></li>
+<li>Como medir sucesso: <span>horas poupadas por processo, taxa de correção pelo revisor e tempo de fila.</span></li>
+<li>Quem mantém: <span>responsável técnico, dono dos prompts por tipo de ação e rotina de revisão de qualidade.</span></li>
+</ul>
+</div>
+<p style="margin-top:12px">Os números de capacidade e custo serão calculados com as medições do piloto, não por estimativa.</p>
+<div class="foot"><span>Proposta Executiva: Arquitetura RAG para Análise Jurídica</span><span>Página 4 de 4</span></div>
 </section>
 </body></html>

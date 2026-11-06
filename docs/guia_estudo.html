@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Guia de Estudo, Escala e Portfólio</title>
+<style>
+@page{size:A4;margin:16mm 16mm 18mm}
+*{box-sizing:border-box}
+body{margin:0;font-family:Helvetica,Arial,sans-serif;color:#2b3340;font-size:11px;line-height:1.55}
+h1{font-size:26px;color:#0f1b2d;margin:0 0 6px;line-height:1.2}
+h2{font-size:17px;color:#0b6a94;margin:22px 0 8px;padding-bottom:5px;border-bottom:2px solid #0b6a94;break-after:avoid}
+h3{font-size:12.5px;color:#0f1b2d;margin:0 0 4px}
+p{margin:0 0 7px}ul{margin:0 0 8px 16px;padding:0}li{margin-bottom:3px}
+.sub{color:#5d7390;font-size:13px;margin:0 0 14px}
+.cover{height:255mm;display:flex;flex-direction:column;justify-content:center;break-after:page}
+.cover .tag{color:#0b6a94;font-weight:700;letter-spacing:.08em;font-size:11px;margin-bottom:10px}
+.toc li{margin-bottom:5px;font-size:12px}
+.card{border:1px solid #d7dee6;border-radius:9px;padding:9px 12px;margin:0 0 9px;break-inside:avoid;background:#fff}
+.card h3 span{display:inline-block;background:#0b6a94;color:#fff;border-radius:99px;font-size:10px;padding:1px 8px;margin-right:6px}
+.card dl{margin:0;display:grid;grid-template-columns:78px 1fr;gap:3px 8px}
+.card dt{font-weight:700;color:#0b6a94;font-size:10px;text-transform:uppercase;padding-top:1px}.card dd{margin:0}
+code{background:#eef2f6;border-radius:4px;padding:0 4px;font-size:10px}
+table{width:100%;border-collapse:collapse;border:1px solid #d7dee6;margin:0 0 10px;font-size:10.5px;break-inside:avoid}
+th{background:#f1f5f9;text-align:left;padding:6px 8px;border-bottom:1px solid #d7dee6}td{padding:6px 8px;border-top:1px solid #e3e8ee;vertical-align:top}
+td:first-child{font-weight:700;color:#0f1b2d;width:25%}
+.note{background:#eef6fd;border-left:5px solid #0b6a94;padding:9px 13px;margin:10px 0;break-inside:avoid}
+.warn{background:#fff6e0;border-left:5px solid #f0a21a;padding:9px 13px;margin:10px 0;break-inside:avoid}
+.flow{display:flex;flex-wrap:wrap;gap:4px;align-items:center;margin:8px 0 12px}
+.flow b{background:#eef6fd;border:1px solid #29a3dc;border-radius:6px;padding:4px 8px;font-size:10px;color:#0f1b2d}.flow i{color:#8aa0b6;font-style:normal}
+.q{break-inside:avoid;margin-bottom:8px}.q b{color:#0b6a94}
+</style></head><body>
+
+<section class="cover">
+<div class="tag">GUIA DE ESTUDO, ESCALA E PORTFÓLIO</div>
+<h1>Sistema de Análise e Extração de Processos Judiciais</h1>
+<p class="sub">O que cada parte faz e por quê, como levar o projeto de Minas Gerais ao Brasil e como apresentá-lo como portfólio</p>
+<ul class="toc">
+<li><b>1.</b> O sistema em um minuto</li>
+<li><b>2.</b> Estudo das implementações (15 módulos, com “o que dizer”)</li>
+<li><b>3.</b> Decisões de projeto e alternativas descartadas</li>
+<li><b>4.</b> Como escalar: Minas Gerais e depois o Brasil</li>
+<li><b>5.</b> Como apresentar como portfólio, usando IA, de forma pessoal e honesta</li>
+<li><b>6.</b> Perguntas que você vai receber (e como responder)</li>
+<li><b>7.</b> Glossário</li>
+</ul>
+<div class="note"><b>Como usar:</b> leia a seção 2 abrindo o arquivo indicado em “Onde”. Para cada módulo, tente explicar com as suas palavras o que ele faz antes de ler a descrição. Os números de capacidade e custo são estimativas: troque-os pelas suas medições (tela Medições).</div>
+</section>
+
+<h2 style="margin-top:0">1. O sistema em um minuto</h2>
+<p>O analista da PGFN hoje abre o PDF do processo, lê, aplica o seu prompt numa ferramenta de IA e digita o resultado numa planilha. O sistema automatiza o caminho inteiro e mantém o analista como decisor.</p>
+<div class="flow"><b>PDFs do processo</b><i>→</i><b>Fila + worker</b><i>→</i><b>Leitura + OCR</b><i>→</i><b>Linha do tempo (eproc / PJe)</b><i>→</i><b>IA com o prompt do analista</b><i>→</i><b>Conferência das citações</b><i>→</i><b>Planilha viva</b><i>→</i><b>Revisão</b><i>→</i><b>Exportar .xlsx</b></div>
+<p><b>Três ideias que sustentam tudo:</b> (1) a IA só <i>interpreta</i>; tudo o que dá para calcular por regra (número do evento, data, ID, página) é feito por código, que não erra por “criatividade”; (2) toda resposta cita a origem e é conferida contra o PDF; (3) uma planilha por caso, uma linha por processo, no layout do próprio analista.</p>
+
+<h2>2. Estudo das implementações</h2>
+<p>Cada cartão segue o mesmo roteiro: <b>Problema</b> que resolve, <b>O que faz</b>, <b>Conceito</b> para aprender, <b>Onde</b> está no código e <b>Diga</b> (frase pronta para a apresentação).</p>
+
+<div class="card"><h3><span>1</span>API e banco de metadados</h3><dl>
+<dt>Problema</dt><dd>Algo precisa receber os PDFs, guardar o estado de cada processo e servir a tela.</dd>
+<dt>O que faz</dt><dd>FastAPI expõe endpoints (casos, upload, planilha, revisão, chat, exportação). O SQLite guarda casos, processos, PDFs, resultados e status, com migrações automáticas de colunas.</dd>
+<dt>Conceito</dt><dd>API REST, validação com Pydantic, migração de esquema, idempotência (o mesmo PDF, pelo hash sha256, não entra duas vezes).</dd>
+<dt>Onde</dt><dd><code>app/main.py</code>, <code>app/db.py</code>, <code>app/schemas.py</code></dd>
+<dt>Diga</dt><dd>“A API é fina: valida, grava e enfileira. O trabalho pesado nunca roda dentro da requisição.”</dd></dl></div>
+
+<div class="card"><h3><span>2</span>Fila, worker e “vigia”</h3><dl>
+<dt>Problema</dt><dd>PDFs de centenas de páginas e chamadas de IA levam minutos; a tela não pode travar nem perder trabalho.</dd>
+<dt>O que faz</dt><dd>A API põe tarefas numa fila (Redis; em memória no desenvolvimento). O worker lê cada PDF e, quando todas as partes de um processo estão prontas, faz <b>uma</b> extração do processo inteiro. Um vigia reenfileira PDFs que ficaram “presos”. Há reenvio e exclusão por PDF.</dd>
+<dt>Conceito</dt><dd>Processamento assíncrono, produtor/consumidor, retomada após falha, “claim” atômico para dois workers não pegarem o mesmo processo.</dd>
+<dt>Onde</dt><dd><code>app/queue.py</code>, <code>app/worker.py</code>, <code>app/run_worker.py</code></dd>
+<dt>Diga</dt><dd>“Se o computador cair no meio, o sistema retoma sozinho. E posso subir mais workers para ir mais rápido.”</dd></dl></div>
+
+<div class="card"><h3><span>3</span>Leitura de PDF, OCR e qualidade do texto</h3><dl>
+<dt>Problema</dt><dd>Autos digitalizados antigos são imagens, ou trazem um texto embutido corrompido (letras cirílicas no lugar das latinas).</dd>
+<dt>O que faz</dt><dd>PyMuPDF lê o texto. Se a página não tem texto útil, ou o texto parece lixo (detector de cirílico e de palavras comuns ausentes), o Tesseract em português refaz o OCR. Mede o tempo por página.</dd>
+<dt>Conceito</dt><dd>PDF nato-digital x digitalizado, OCR, heurística de qualidade, leitura página a página (não carrega tudo na memória).</dd>
+<dt>Onde</dt><dd><code>app/ingest/pdf.py</code>, <code>app/ingest/quality.py</code></dd>
+<dt>Diga</dt><dd>“Não confiamos cegamente no texto do PDF: se ele parece corrompido, lemos a imagem de novo.”</dd></dl></div>
+
+<div class="card"><h3><span>4</span>Citações: Evento (eproc), ID (PJe), VOL (físico)</h3><dl>
+<dt>Problema</dt><dd>Seu maior gargalo: ferramentas de IA confundem Evento com ID e com a página do ato.</dd>
+<dt>O que faz</dt><dd>Detecta o sistema (rodapé “Num. X – Pág. N” = PJe; marcadores do eproc) e <b>monta o rótulo de cada trecho por código</b>: <code>Evento N, pg. P</code> ou <code>ID N, pg. P</code>. A IA só copia o rótulo. Lê também número, volume e página inicial pelo nome do arquivo.</dd>
+<dt>Conceito</dt><dd>Expressões regulares, herança de marcador entre páginas, “não peça ao modelo o que o código sabe”.</dd>
+<dt>Onde</dt><dd><code>app/ingest/citation.py</code></dd>
+<dt>Diga</dt><dd>“A citação não vem da memória da IA: vem de uma tabela que o código montou.”</dd></dl></div>
+
+<div class="card"><h3><span>5</span>Linha do tempo do eproc (sem IA)</h3><dl>
+<dt>Problema</dt><dd>A cronologia dos atos é o que o analista mais usa, e a IA errava datas e inventava eventos.</dd>
+<dt>O que faz</dt><dd>Lê as “páginas de separação” do eproc (2º grau e 1ª instância): nº do evento, data, movimento, usuário. Classifica a relevância (alta, média, baixa). A IA recebe o <b>índice completo</b> e o texto integral só dos atos relevantes; depois a cronologia escrita por ela é conferida (data corrigida, ordem, eventos inexistentes apontados).</dd>
+<dt>Conceito</dt><dd>Fonte autoritativa x geração, redução de contexto por relevância, pós-validação.</dd>
+<dt>Onde</dt><dd><code>app/ingest/eventos.py</code>, <code>app/extract.py</code> (<code>select_context_eventos</code>)</dd>
+<dt>Diga</dt><dd>“Reduzimos o texto enviado à IA e, ao mesmo tempo, ganhamos precisão: ela vê o mapa completo e lê só o que importa.”</dd></dl></div>
+
+<div class="card"><h3><span>6</span>Linha do tempo do PJe</h3><dl>
+<dt>Problema</dt><dd>O PJe não tem páginas de separação, e processos migrados trazem os autos físicos digitalizados como um único “Volume”.</dd>
+<dt>O que faz</dt><dd>Lê a tabela “Documentos” da capa (ID, data, nome, tipo; o ID vem quebrado em duas linhas) e cruza com os rodapés “Num. ID – Pág.”. O Volume recebe o orçamento restante, priorizando as páginas mais recentes. A cronologia sai como <code>ID N, pg. P - data - ato</code> e é conferida.</dd>
+<dt>Conceito</dt><dd>Adaptador por sistema: mesmo motor, fontes diferentes.</dd>
+<dt>Onde</dt><dd><code>app/ingest/pje.py</code>, <code>tests/test_pje.py</code></dd>
+<dt>Diga</dt><dd>“Cada sistema processual ganha um adaptador pequeno; o resto do sistema não muda. É assim que o projeto escala para outros tribunais.”</dd></dl></div>
+
+<div class="card"><h3><span>7</span>Busca híbrida (Elasticsearch)</h3><dl>
+<dt>Problema</dt><dd>Para o chat e para processos grandes, é preciso achar as páginas certas sem mandar tudo à IA.</dd>
+<dt>O que faz</dt><dd>Indexa cada página com busca por palavras (BM25) e por vetor (embeddings locais de 256 dimensões) e combina as duas. Sem Elasticsearch, usa um índice em memória com a mesma interface.</dd>
+<dt>Conceito</dt><dd>Busca lexical x semântica, embeddings, RAG, interface comum para trocar o motor.</dd>
+<dt>Onde</dt><dd><code>app/search/</code> (<code>base.py</code>, <code>elastic.py</code>, <code>memory.py</code>)</dd>
+<dt>Diga</dt><dd>“Termos exatos como número de matrícula pedem busca por palavra; perguntas em linguagem natural pedem busca por significado. Usamos as duas.”</dd></dl></div>
+
+<div class="card"><h3><span>8</span>Extração por LLM com prompts do analista</h3><dl>
+<dt>Problema</dt><dd>Transformar o texto em campos da planilha, respeitando listas fechadas e o formato do analista.</dd>
+<dt>O que faz</dt><dd>Escolhe o prompt pelo tipo/classe (execução fiscal, embargos, recursos, outras ações) e envia o contexto. A saída é um <b>JSON restrito ao esquema</b> da aba: listas fechadas (ex.: EXIT. GARANTIA) aceitam só valores permitidos; fora da lista vira “revisar”. Se o contexto passa do limite, registra o corte.</dd>
+<dt>Conceito</dt><dd>Saída estruturada, esquema JSON, engenharia de prompt, orçamento de contexto, “nunca invente: use nulo”.</dd>
+<dt>Onde</dt><dd><code>app/extract.py</code>, <code>prompts/*.md</code>, <code>app/schemas.py</code></dd>
+<dt>Diga</dt><dd>“Os prompts são do analista, versionados em arquivo. Quem conhece o direito controla o conteúdo; o código controla o formato.”</dd></dl></div>
+
+<div class="card"><h3><span>9</span>Provedores de IA (Gemini e Anthropic)</h3><dl>
+<dt>Problema</dt><dd>Limites de uso, erros 503/429 e troca de modelos não podem quebrar o trabalho.</dd>
+<dt>O que faz</dt><dd>Interface única para Gemini (padrão, AI Studio) e Anthropic. Novas tentativas com espera, modelo reserva, mensagens de erro em português e métricas de cada chamada (tokens, tentativas, espera, modelo).</dd>
+<dt>Conceito</dt><dd>Padrão adaptador, <i>retry</i> com recuo exponencial, tolerância a falhas, observabilidade.</dd>
+<dt>Onde</dt><dd><code>app/llm.py</code>, <code>app/config.py</code></dd>
+<dt>Diga</dt><dd>“Trocar de provedor é mudar uma variável de ambiente. Não ficamos presos a um fornecedor.”</dd></dl></div>
+
+<div class="card"><h3><span>10</span>Validação: citações e cronologia</h3><dl>
+<dt>Problema</dt><dd>Em contexto jurídico, uma citação inventada é pior que nenhuma.</dd>
+<dt>O que faz</dt><dd>Confere cada “Evento/ID/pg.” citado com as páginas realmente lidas e sinaliza as inválidas. Formata corresponsáveis como lista “Nome – CPF/CNPJ”. Confere a cronologia (seção 5 e 6).</dd>
+<dt>Conceito</dt><dd>Verificação independente da saída do modelo (“confiar, mas conferir”).</dd>
+<dt>Onde</dt><dd><code>app/extract.py</code> (<code>check_citations</code>, <code>format_corresponsaveis</code>)</dd>
+<dt>Diga</dt><dd>“O revisor vê um alerta quando a IA cita algo que não existe no PDF.”</dd></dl></div>
+
+<div class="card"><h3><span>11</span>Planilha modelo e exportação</h3><dl>
+<dt>Problema</dt><dd>Cada analista tem a sua planilha; o sistema não pode impor um layout.</dd>
+<dt>O que faz</dt><dd>Lê o .xlsx do analista, reconhece colunas pelo texto do cabeçalho (normalizado), cadastra os processos da planilha, preenche <b>só células vazias</b>, acrescenta linhas novas, preserva as demais abas e avisa sobre colunas que não reconhece.</dd>
+<dt>Conceito</dt><dd>Mapeamento por cabeçalho, escrita não destrutiva, openpyxl.</dd>
+<dt>Onde</dt><dd><code>app/template.py</code>, <code>app/export.py</code>, <code>app/view.py</code></dd>
+<dt>Diga</dt><dd>“O sistema se adapta à planilha do analista, e não o contrário. Nada que ele já digitou é sobrescrito.”</dd></dl></div>
+
+<div class="card"><h3><span>12</span>Revisão e chatbot com fontes</h3><dl>
+<dt>Problema</dt><dd>O analista precisa aprovar o resultado e tirar dúvidas sobre o processo.</dd>
+<dt>O que faz</dt><dd>Cada processo tem situação (a revisar, revisado, erro…). Edições do analista são preservadas; “Refazer extração” descarta. O chat busca as páginas relevantes e responde citando a origem; a resposta pode ser adicionada às observações.</dd>
+<dt>Conceito</dt><dd>Humano no circuito (<i>human-in-the-loop</i>), RAG com citação.</dd>
+<dt>Onde</dt><dd><code>app/rag.py</code>, endpoint <code>/api/chat</code>, <code>static/app.js</code></dd>
+<dt>Diga</dt><dd>“A IA propõe, o analista decide. Cada resposta traz a página de onde saiu.”</dd></dl></div>
+
+<div class="card"><h3><span>13</span>Planilha viva (front-end)</h3><dl>
+<dt>Problema</dt><dd>Um painel de cadastro e outro de resultados obrigava a ir e voltar.</dd>
+<dt>O que faz</dt><dd>Tela única: tabela editável (70%) e assistente retrátil (30%). Tema claro/escuro, filtros, colunas e linhas redimensionáveis, janelas para textos longos, erros por PDF com “tentar novamente”.</dd>
+<dt>Conceito</dt><dd>JavaScript sem framework, variáveis CSS para temas, <code>localStorage</code> para preferências.</dd>
+<dt>Onde</dt><dd><code>static/index.html</code>, <code>static/app.css</code>, <code>static/app.js</code></dd>
+<dt>Diga</dt><dd>“A interface parece o Excel que o analista já usa, com a IA do lado.”</dd></dl></div>
+
+<div class="card"><h3><span>14</span>Medições</h3><dl>
+<dt>Problema</dt><dd>Para convencer a direção e dimensionar custos, é preciso números e não impressões.</dd>
+<dt>O que faz</dt><dd>Mostra tokens, páginas enviadas à IA, processos cortados, tempos de leitura/OCR/IA, tentativas e ritmo estimado, em cartões e barras.</dd>
+<dt>Conceito</dt><dd>Observabilidade: medir antes de otimizar.</dd>
+<dt>Onde</dt><dd><code>static/app.js</code> (<code>renderMed</code>), <code>app/worker.py</code> (<code>medidas</code>)</dd>
+<dt>Diga</dt><dd>“Com 30 processos medidos, projeto o volume por dia e o custo, sem chute.”</dd></dl></div>
+
+<div class="card"><h3><span>15</span>Empacotamento e testes</h3><dl>
+<dt>Problema</dt><dd>Rodar em qualquer máquina igual e garantir que mudanças não quebrem o que funciona.</dd>
+<dt>O que faz</dt><dd>Docker Compose sobe API, worker, Redis e Elasticsearch com um comando. 80 testes automatizados usam uma IA simulada para testar o fluxo inteiro sem custo.</dd>
+<dt>Conceito</dt><dd>Contêineres, ambiente reproduzível, testes com <i>mocks</i>.</dd>
+<dt>Onde</dt><dd><code>Dockerfile</code>, <code>docker-compose.yml</code>, <code>tests/</code></dd>
+<dt>Diga</dt><dd>“Cada regra que aprendemos com um processo real virou um teste, para não voltar a errar.”</dd></dl></div>
+
+<h2>3. Decisões de projeto e alternativas descartadas</h2>
+<table>
+<tr><th>Decisão</th><th>Por quê (e o que foi descartado)</th></tr>
+<tr><td>Uma extração por processo</td><td>Juntar todas as partes e fazer 1 chamada dá visão completa e custa menos que uma chamada por PDF. Custo: o limite de contexto, tratado com índice + relevância.</td></tr>
+<tr><td>Código monta as citações</td><td>Evita o erro Evento x ID. Alternativa descartada: pedir à IA que “descubra” o número.</td></tr>
+<tr><td>Índice completo + texto só do relevante</td><td>Menos tokens e mais precisão que enviar tudo. Risco: classificar mal um ato; por isso existe o botão Eventos e a revisão.</td></tr>
+<tr><td>Planilha do analista como modelo</td><td>Substituiu o cadastro por relatório do Mcfly: menos etapas e adapta-se a qualquer layout.</td></tr>
+<tr><td>Embeddings locais (256d)</td><td>Zero custo e sem enviar dados a terceiros. Alternativa avaliada: EmbeddingGemma 2, só vale se as Medições mostrarem muitos processos cortados.</td></tr>
+<tr><td>JavaScript simples no front</td><td>Sem build nem dependências; fácil de hospedar. Streamlit foi considerado e descartado pelo layout e pelo controle de interface.</td></tr>
+<tr><td>Modelos Flash no teste</td><td>O nível gratuito dá quota zero aos modelos Pro e limites diários baixos aos Flash; por isso o ritmo do piloto é limitado pelo Google, e não pelo sistema.</td></tr>
+</table>
+
+<h2>4. Como escalar: Minas Gerais e depois o Brasil</h2>
+<p>Escalar é resolver <b>quatro problemas diferentes</b>. Trate-os separadamente.</p>
+<h3>4.1 Escala de volume (técnica)</h3>
+<table>
+<tr><th>Hoje (piloto)</th><th>Para Minas Gerais</th><th>Para o Brasil</th></tr>
+<tr><td>SQLite em um arquivo</td><td>PostgreSQL gerenciado</td><td>PostgreSQL com réplicas e separação por região/unidade</td></tr>
+<tr><td>PDFs em disco local</td><td>Armazenamento de objetos (com criptografia)</td><td>Idem, com política de retenção e descarte</td></tr>
+<tr><td>1 worker</td><td>Vários workers por contêiner (autoescala)</td><td>Fila gerenciada e workers por região</td></tr>
+<tr><td>Elasticsearch único</td><td>Cluster pequeno</td><td>Cluster dimensionado por volume; avaliar índices por unidade</td></tr>
+<tr><td>Chave de API em arquivo</td><td>Cofre de segredos</td><td>Cofre + rotação automática</td></tr>
+<tr><td>Medições na tela</td><td>Métricas e alertas (tempo de fila, erros, custo)</td><td>Painel nacional de qualidade e custo</td></tr>
+</table>
+<p><b>Gargalos reais, nesta ordem:</b> (1) limite de uso do provedor de IA (resolve-se com conta paga e cotas negociadas); (2) OCR dos digitalizados (resolve-se com mais workers e OCR em paralelo); (3) a revisão humana (o ganho vem de reduzir o tempo de conferência, e não de eliminar o analista).</p>
+<h3>4.2 Escala de sistemas processuais</h3>
+<p>O projeto já tem um adaptador para eproc e outro para PJe. Para cada novo sistema (e-SAJ, Projudi e outros), o trabalho é: (a) coletar 5 a 10 PDFs reais; (b) descobrir onde estão ID, data e tipo de cada ato; (c) escrever o adaptador e os testes; (d) ajustar a citação. Priorize pelos tribunais com mais processos da carteira. Verifique também se há integração oficial com os sistemas (hoje o fluxo é por PDF baixado) e se ela é permitida para a instituição.</p>
+<h3>4.3 Escala de governança (o que a direção vai perguntar)</h3>
+<ul>
+<li><b>LGPD e sigilo:</b> processos têm dados pessoais e, às vezes, segredo de justiça. É preciso base legal, acordo de tratamento de dados e garantia contratual de que o provedor de IA não usa os dados para treinar modelos. Não use o nível gratuito com processos reais.</li>
+<li><b>Segurança:</b> login institucional (SSO), perfis por procuradoria, trilha de auditoria (quem revisou o quê), criptografia e backup.</li>
+<li><b>Responsabilidade:</b> a IA nunca decide; o analista revisa e assina. Registrar a versão do prompt e do modelo usados em cada extração.</li>
+<li><b>Onde rodar:</b> nuvem institucional, nuvem contratada ou infraestrutura própria. A escolha depende da área de TI e de segurança da instituição.</li>
+</ul>
+<h3>4.4 Escala de adoção (pessoas)</h3>
+<ul>
+<li><b>Piloto medido:</b> 20 a 30 processos com um “conjunto de referência” (relatórios já feitos à mão). Medir: acerto por campo, citações válidas, tempo por processo.</li>
+<li><b>Campeões:</b> 2 a 3 analistas por unidade que validam prompts e listas fechadas.</li>
+<li><b>Biblioteca de prompts versionada:</b> um dono por tipo de ação e revisão periódica.</li>
+<li><b>Treinamento curto:</b> 1 hora de uso e 1 página de “quando não confiar” (digitalizados ruins, cortes, listas fechadas).</li>
+</ul>
+<h3>4.5 Roteiro</h3>
+<table>
+<tr><th>Etapa</th><th>Meta e critério para avançar</th></tr>
+<tr><td>0. Piloto</td><td>Provar o ganho com números. Avança se o acerto e o tempo forem aceitos pelos analistas.</td></tr>
+<tr><td>1. Minas Gerais</td><td>Produção segura (login, auditoria, infraestrutura gerenciada, conta paga). Avança com adoção estável e custo por processo conhecido.</td></tr>
+<tr><td>2. Novos sistemas</td><td>Adaptadores por sistema, na ordem de volume da carteira.</td></tr>
+<tr><td>3. Brasil</td><td>Implantação por regiões, painel nacional e equipe de suporte.</td></tr>
+</table>
+<div class="warn"><b>Atenção:</b> para propor isso à direção, leve três números do piloto: <b>tempo médio por processo</b>, <b>% de campos corretos sem edição</b> e <b>custo médio por processo</b>. Sem eles, “potencial enorme” vira opinião; com eles, vira argumento.</div>
+
+<h2>5. Portfólio: mostrar o projeto, usando IA, de forma pessoal e honesta</h2>
+<div class="note"><b>Primeiro, um cuidado:</b> este projeto nasceu de um trabalho real e lida com processos reais. Antes de publicar código, telas ou exemplos, confirme com a instituição o que pode ser divulgado. Nunca publique dados reais de processos, nomes de partes, números de processo nem capturas de tela com dados. Use processos sintéticos e anonimizados na demonstração.</div>
+<h3>5.1 Usar IA não é problema; esconder é</h3>
+<p>Hoje, recrutadores esperam que desenvolvedores usem IA. O que diferencia as pessoas é <b>julgamento</b>: saber o que pedir, avaliar, recusar e corrigir. Diga abertamente: “Construí com assistência de IA; as decisões, as regras de negócio e a validação foram minhas.” Ser claro sobre isso é um ponto a favor.</p>
+<h3>5.2 O que torna o projeto seu</h3>
+<table>
+<tr><th>O que fazer</th><th>Por que funciona</th></tr>
+<tr><td>Escreva o “porquê” de cada decisão</td><td>Um registro curto por decisão (ex.: “por que o código monta as citações”). Mostra raciocínio, que a IA não dá por você.</td></tr>
+<tr><td>Destaque o conhecimento do domínio</td><td>Evento x ID, listas fechadas, relevância dos atos, critérios do analista. Poucos desenvolvedores conhecem a rotina da PGFN: é o seu diferencial.</td></tr>
+<tr><td>Meça e mostre números</td><td>Tempo por processo, % de acerto contra o relatório manual, citações válidas. Números do piloto valem mais que adjetivos.</td></tr>
+<tr><td>Conte os erros que você resolveu</td><td>Cota do Gemini, Elasticsearch caindo, texto corrompido, 503. Um “diário de bordo” de problemas e soluções prova autoria.</td></tr>
+<tr><td>Reescreva uma parte à mão</td><td>Escolha um módulo (ex.: <code>parse_indice</code> do PJe) e refaça sem ajuda, com testes seus. Você vai poder explicar cada linha.</td></tr>
+<tr><td>Escreva um teste seu</td><td>Um caso real anonimizado que você descobriu. É assinatura de quem entende o problema.</td></tr>
+<tr><td>Crie um conjunto de referência</td><td>Compare a saída da IA com o seu gabarito. Mostrar avaliação é o que separa um demo de um sistema sério.</td></tr>
+<tr><td>Faça um artigo ou vídeo de 5 minutos</td><td>“Como reduzi erros de citação em processos judiciais com IA.” Sua voz e sua história.</td></tr>
+</table>
+<h3>5.3 Estrutura sugerida do portfólio</h3>
+<ol>
+<li><b>Resumo em 3 linhas:</b> problema, solução, resultado (com números).</li>
+<li><b>Demonstração:</b> vídeo curto com processo sintético; diagrama de arquitetura.</li>
+<li><b>Decisões e trade-offs:</b> use a seção 3 deste guia como base.</li>
+<li><b>Qualidade:</b> testes, avaliação contra gabarito, medições.</li>
+<li><b>Limites e riscos:</b> LGPD, quando não confiar, o que ainda falta.</li>
+<li><b>Seu papel:</b> o que você decidiu e o que a IA gerou (uma tabela honesta).</li>
+</ol>
+<h3>5.4 Frases para currículo (troque pelos seus números)</h3>
+<ul>
+<li>“Projetei e implementei, com apoio de IA, um sistema que extrai dados de processos judiciais (eproc/PJe) para planilha, com citações verificadas automaticamente.”</li>
+<li>“Reduzi o tempo de análise por processo de <b>[X]</b> para <b>[Y]</b> minutos em piloto com <b>[N]</b> processos (medido).”</li>
+<li>“Construí avaliação contra gabarito: <b>[Z]%</b> dos campos corretos sem edição; <b>[W]%</b> das citações válidas.”</li>
+<li>“Arquitetura assíncrona (Redis, workers), OCR, busca híbrida (Elasticsearch) e integração com Gemini, empacotada em Docker, com 80 testes automatizados.”</li>
+</ul>
+<h3>5.5 Para entrevista: sabendo explicar</h3>
+<p>Treine explicar, sem olhar o código: (1) o fluxo de ponta a ponta; (2) por que o código monta as citações; (3) como a linha do tempo reduz tokens e erros; (4) o que acontece se o Gemini cair; (5) o que você mudaria para 100 vezes mais volume.</p>
+
+<h2>6. Perguntas que você vai receber</h2>
+<div class="q"><b>“A IA pode errar. Como vocês garantem confiança?”</b><br>Três camadas: citações montadas por código e conferidas com o PDF; datas e eventos validados contra o índice do sistema; revisão do analista antes de exportar. E há medição de acerto contra relatórios feitos à mão.</div>
+<div class="q"><b>“E os dados sigilosos?”</b><br>Não se usa o nível gratuito com processos reais. Em produção: contrato que proíbe treinar modelos com os dados, controle de acesso, auditoria e, se necessário, infraestrutura da própria instituição.</div>
+<div class="q"><b>“Quanto custa por processo?”</b><br>Depende do modelo e do tamanho do processo. A tela Medições mostra tokens por processo; multiplicando pelo preço vigente do modelo escolhido, chega-se ao custo. Apresente o número do piloto, e não uma estimativa.</div>
+<div class="q"><b>“Quanto tempo economiza?”</b><br>Compare o tempo manual por processo (cronometre 10 processos) com o tempo de revisão assistida. Mostre também o tempo de máquina (OCR + IA), que roda sem o analista.</div>
+<div class="q"><b>“E se o fornecedor de IA mudar ou sair do ar?”</b><br>Há interface única para provedores (Gemini e Anthropic), modelo reserva, novas tentativas e fila que retoma sozinha.</div>
+<div class="q"><b>“Funciona com outros tribunais?”</b><br>Com adaptadores por sistema processual: eproc e PJe já existem. Cada novo sistema exige amostras reais e testes.</div>
+<div class="q"><b>“O que você fez e o que a IA fez?”</b><br>Responda com a tabela “Seu papel” (seção 5.3, item 6). Exemplo: “A IA escreveu a primeira versão do código; eu defini as regras do analista, escolhi as decisões de arquitetura, validei com processos reais e escrevi os casos de teste.”</div>
+
+<h2>7. Glossário</h2>
+<table>
+<tr><th>Termo</th><th>Significado</th></tr>
+<tr><td>RAG</td><td>Buscar os trechos relevantes e entregá-los à IA para que responda com base neles, citando a fonte.</td></tr>
+<tr><td>Token</td><td>Pedaço de texto que a IA conta e cobra (em português, cerca de 2,5 caracteres por token nas medições).</td></tr>
+<tr><td>Contexto</td><td>Quanto texto cabe em uma chamada à IA. Texto acima do limite é cortado.</td></tr>
+<tr><td>OCR</td><td>Reconhecimento de texto a partir da imagem de uma página.</td></tr>
+<tr><td>Embedding</td><td>Representação numérica do significado de um texto, usada na busca semântica.</td></tr>
+<tr><td>BM25</td><td>Algoritmo clássico de busca por palavras.</td></tr>
+<tr><td>Worker</td><td>Processo que pega tarefas da fila e as executa em segundo plano.</td></tr>
+<tr><td>Fila (Redis)</td><td>Lista de tarefas pendentes, mantida fora da API.</td></tr>
+<tr><td>Saída estruturada</td><td>Resposta da IA obrigada a seguir um esquema JSON.</td></tr>
+<tr><td>Human-in-the-loop</td><td>O humano revisa e decide antes do resultado valer.</td></tr>
+<tr><td>Eproc / PJe</td><td>Sistemas de processo eletrônico. O eproc identifica atos por Evento; o PJe, por ID de documento.</td></tr>
+<tr><td>Rate limit</td><td>Limite de chamadas por minuto/dia imposto pelo provedor de IA.</td></tr>
+</table>
+</body></html>
