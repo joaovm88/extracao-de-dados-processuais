@@ -125,3 +125,13 @@ body.resizing{user-select:none;cursor:col-resize}body.resizing *{cursor:inherit!
 .seg button{border:0;background:none;color:var(--muted);font:inherit;font-size:12px;font-weight:600;padding:5px 11px;cursor:pointer}.seg button:hover{background:var(--hover)}.seg button.on{background:var(--blue);color:#fff}
 #grid.dens-compacto tbody tr{--rh:66px}#grid.dens-compacto td.first{padding:6px 10px}#grid.dens-compacto .first .sub{margin-top:2px}#grid.dens-compacto .first .sub{flex-wrap:nowrap;overflow:hidden}#grid.dens-compacto .rev span{display:none}
 #grid.dens-amplo{--clamp:9}
+
+/* medições: painel com KPIs e barras empilhadas */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.kpi{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.kpi span{font-size:11.5px;color:var(--muted);font-weight:600}.kpi b{font-size:24px;line-height:1.15}.kpi b em{font-size:13px;font-style:normal;color:var(--muted);font-weight:600}.kpi small{font-size:11px;color:var(--muted)}
+.mrows{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px 20px;margin-bottom:6px}
+.mt{display:flex;justify-content:space-between;font-size:12.5px;font-weight:600;margin-bottom:5px}
+.mbar{display:flex;gap:2px;height:9px;border-radius:99px;overflow:hidden;background:var(--line)}.mbar i{display:block;min-width:3px}
+td .mbar{height:5px;margin-top:4px;min-width:70px}
+.mleg{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px;font-size:11.5px;color:var(--muted)}.mleg i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px}.mleg b{color:var(--ink)}
