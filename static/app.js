@@ -264,11 +264,13 @@ $('chat').onsubmit = e => { e.preventDefault(); ask($('q').value); };
 const fmtT = x => x == null ? '—' : x < 60 ? `${Math.round(x)} s` : `${Math.floor(x / 60)} min ${Math.round(x % 60)} s`;
 const fmtN = n => n == null ? '—' : n >= 1e6 ? `${(n / 1e6).toFixed(2).replace('.', ',')} ${n >= 2e6 ? 'milhões' : 'milhão'}` : n >= 1000 ? `${(n / 1000).toFixed(1).replace('.', ',')} mil` : String(n);
 function renderMed() {
-  const ls = data.linhas, com = ls.filter(l => l.medidas), cortados = com.filter(l => l.medidas.contexto.cortado);
+  const todos = data.linhas, ls = todos.filter(l => l.medidas || l.docs.length), com = ls.filter(l => l.medidas), cortados = com.filter(l => l.medidas.contexto.cortado);
   const sum = (a, f) => a.reduce((t, x) => t + (f(x) || 0), 0), docs = ls.flatMap(l => l.docs.map(d => d.tempos).filter(Boolean));
   const tin = sum(com, l => l.medidas.tokens?.entrada), tout = sum(com, l => (l.medidas.tokens?.saida || 0) + (l.medidas.tokens?.raciocinio || 0));
   const ocrP = sum(docs, t => t.ocr_paginas), ocrS = sum(docs, t => t.ocr_s);
+  const dc = data.documentos, st = x => dc.filter(d => d.status === x).length, naFila = dc.filter(d => d.status === 'queued');
   $('med-sum').innerHTML = `<ul class="med">
+    <li>PDFs enviados: <b>${dc.length}</b> · lidos <b>${st('done')}</b> · na fila <b>${st('queued')}</b> · lendo <b>${st('processing')}</b> · com erro <b>${st('error')}</b>. Processos do caso: <b>${todos.length}</b>, com PDF: <b>${ls.length}</b>.</li>
     <li><b>${cortados.length} de ${com.length}</b> processo(s) extraído(s) foram <b>cortados</b>: não couberam no limite enviado à IA.</li>
     <li>Tokens gastos nas extrações: <b>${fmtN(tin)}</b> de entrada e <b>${fmtN(tout)}</b> de saída.</li>
     <li>Tempo de leitura dos PDFs: <b>${fmtT(sum(docs, t => t.total_s))}</b> (OCR: ${ocrP} página(s) em ${fmtT(ocrS)}). Tempo de IA: <b>${fmtT(sum(com, l => l.medidas.extracao_s))}</b>.</li></ul>
@@ -279,7 +281,7 @@ function renderMed() {
     return `<tr><td><span class="num">${esc(l.numero)}</span></td><td>${c ? c.paginas_total : (l.paginas ?? '—')}</td>
       <td>${c ? `${c.paginas_enviadas} de ${c.paginas_total} ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">inteiro</span>'}<div class="muted">${fmtN(c.caracteres_enviados)} de ${fmtN(c.caracteres_total)} caracteres</div>` : '—'}</td>
       <td>${tk ? `${fmtN(tk.entrada)} / ${fmtN((tk.saida || 0) + (tk.raciocinio || 0))}` : '—'}</td><td>${m ? fmtT(m.extracao_s) : '—'}</td>
-      <td>${d.length ? `${fmtT(sum(d, t => t.total_s))}<div class="muted">OCR: ${sum(d, t => t.ocr_paginas)} pág. em ${fmtT(sum(d, t => t.ocr_s))}</div>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Sem processos.</td></tr>';
+      <td>${d.length ? `${fmtT(sum(d, t => t.total_s))}<div class="muted">OCR: ${sum(d, t => t.ocr_paginas)} pág. em ${fmtT(sum(d, t => t.ocr_s))}</div>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nenhum processo com PDF enviado ainda.</td></tr>';
 }
 $('btn-med').onclick = () => { renderMed(); $('dlg-med').showModal(); };
 

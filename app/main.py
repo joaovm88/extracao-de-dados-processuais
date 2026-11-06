@@ -56,20 +56,40 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     stop = threading.Event()
     llm = llm_client or get_llm(s)
 
-    def recover_stuck_docs() -> None:
-        """PDFs que ficaram 'queued/processing' porque o Docker foi parado no meio voltam para a fila.
-        Fila em memória: tudo pendente é órfão (o worker reinicia junto). Redis: só 'processing' parado há >10 min."""
-        now = time.time()
+    def recover_stuck_docs() -> int:
+        """Devolve à fila os PDFs cujo pedido se perdeu (Docker reiniciado, worker caído). Roda na partida e a cada minuto.
+        - 'queued' há mais de 90 s e AUSENTE da fila  -> reenfileira;
+        - 'processing' sem andamento há mais de 10 min -> reenfileira;
+        - fila em memória, na partida: tudo pendente é órfão (o worker reinicia junto)."""
+        now, n = time.time(), 0
         for d in db.list():
-            orphan = (d["status"] in ("queued", "processing") and s.queue_backend == "memory") or \
-                     (d["status"] == "processing" and now - (d["updated_at"] or 0) > 600)
-            if orphan:
+            idade = now - (d["updated_at"] or 0)
+            perdido = (d["status"] == "queued" and idade > 90 and not queue.contains(d["id"])) or \
+                      (d["status"] == "processing" and idade > 600)
+            if perdido:
                 db.update(d["id"], status="queued", error=None)
                 queue.enqueue(d["id"])
+                n += 1
+        return n
+
+    def watchdog() -> None:
+        while not stop.wait(60):
+            try:
+                if n := recover_stuck_docs():
+                    logging.getLogger("api").warning("Recuperados %s PDF(s) que estavam parados na fila", n)
+            except Exception:  # noqa: BLE001  o vigia nunca derruba a API
+                logging.getLogger("api").exception("Falha no vigia da fila")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        recover_stuck_docs()
+        if s.queue_backend == "memory":  # o worker em memória reinicia junto com a API: tudo pendente é órfão
+            for d in db.list():
+                if d["status"] in ("queued", "processing"):
+                    db.update(d["id"], status="queued", error=None)
+                    queue.enqueue(d["id"])
+        else:
+            recover_stuck_docs()
+        threading.Thread(target=watchdog, daemon=True).start()
         # Fila em memória: worker na mesma aplicação. Com Redis, rode `python -m app.run_worker`.
         if s.queue_backend == "memory":
             threading.Thread(target=run_worker, args=(queue, s, db, store, stop, llm), daemon=True).start()
@@ -77,7 +97,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         stop.set()
 
     app = FastAPI(title="Análise e Ingestão de Processos Judiciais", lifespan=lifespan)
-    app.state.queue, app.state.db, app.state.store = queue, db, store
+    app.state.queue, app.state.db, app.state.store, app.state.recover = queue, db, store, recover_stuck_docs
 
     @app.exception_handler(Exception)
     async def unhandled(request, exc: Exception):

@@ -169,10 +169,16 @@ class MetadataDB:
                 rows = self._conn.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
         return [self._row(r) for r in rows]
 
-    def pending_docs(self, case_id: str) -> int:
+    def pending_docs(self, case_id: str, numero: Optional[str] = None) -> int:
+        """PDFs do caso ainda na fila/processando. Com `numero`: só os que podem ser desse processo
+        (mesmo nº ou nº ainda desconhecido); PDF de OUTRO processo não o segura."""
+        sql = "SELECT COUNT(*) FROM documents WHERE case_id=? AND status IN ('queued','processing')"
+        args: tuple = (case_id,)
+        if numero is not None:
+            sql += " AND (numero_processo IS NULL OR numero_processo=?)"
+            args = (case_id, numero)
         with self._lock:
-            return self._conn.execute(
-                "SELECT COUNT(*) FROM documents WHERE case_id=? AND status IN ('queued','processing')", (case_id,)).fetchone()[0]
+            return self._conn.execute(sql, args).fetchone()[0]
 
     def docs_for_process(self, case_id: str, numero: str) -> list[dict]:
         """Partes do processo, na ordem dos autos (volume, parte, página inicial)."""

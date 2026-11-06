@@ -33,6 +33,8 @@ services:
     deploy: { replicas: 2 }
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes   # a fila sobrevive a reinicializações
+    volumes: ["redisdata:/data"]
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
     environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms1g -Xmx1g" }
@@ -43,4 +45,4 @@ services:
       timeout: 5s
       retries: 40
       start_period: 20s
-volumes: { data: {}, esdata: {} }
+volumes: { data: {}, esdata: {}, redisdata: {} }

@@ -130,10 +130,13 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
 
 
 def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:
-    """Quando não há mais PDFs do caso em andamento, extrai cada processo com material novo (uma vez só)."""
-    if not case_id or db.pending_docs(case_id):
+    """Extrai cada processo com material novo quando não há mais PDFs DELE em andamento (uma vez só).
+    Um PDF parado na fila segura só o próprio processo (e PDFs de nº ainda desconhecido), não o caso inteiro."""
+    if not case_id:
         return
     for proc in db.list_processes(case_id):
+        if db.pending_docs(case_id, proc["numero"]):
+            continue
         if proc.get("stale") == 1 and not proc.get("reviewed"):  # processo já revisado só reextrai sob pedido
             extract_process(case_id, proc["numero"], settings, db, store, llm_client)
 

@@ -22,6 +22,9 @@ class MemoryQueue:
             finally:
                 self._q.task_done()
 
+    def contains(self, doc_id: str) -> bool:
+        return doc_id in list(self._q.queue)
+
     def join(self) -> None:
         self._q.join()
 
@@ -36,6 +39,9 @@ class RedisQueue:
 
     def enqueue(self, doc_id: str) -> None:
         self.r.lpush(self.KEY, doc_id)
+
+    def contains(self, doc_id: str) -> bool:
+        return doc_id in self.r.lrange(self.KEY, 0, -1)
 
     def consume(self, handler: Callable[[str], None], stop: threading.Event) -> None:
         while not stop.is_set():
