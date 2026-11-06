@@ -52,7 +52,7 @@ Faça na ordem. Antes de cada um, tente **explicar com as suas palavras** o que 
 **Desafio:** rode com `budget=60000` e com `budget=800000` e compare `paginas_enviadas`.
 
 ## Exercício 6: a extração e as listas fechadas
-**Arquivo:** `app/extract.py` (`extract_with_llm`, `validate`) · **Teste:** `tests/test_pipeline.py` (procure `validate`)
+**Arquivo:** `app/extract.py` (`extract_with_llm`, `validate`) · **Teste:** `tests/test_cases.py::test_validate_rejects_value_outside_closed_list`
 1. Parada em `validate`. Dê a ela um valor fora da lista (ex.: garantia = "CARRO") e veja o campo ir para `revisar`.
 2. Abra `prompts/execucoes_fiscais.md` e leia o prompt. Edite uma frase, rode um teste e veja o que muda no `system` enviado.
 **Pergunta:** por que a lista fechada é checada por código e não só pedida no prompt?
