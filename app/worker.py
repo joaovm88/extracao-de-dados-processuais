@@ -12,6 +12,7 @@ from . import extract as ex
 from .config import Settings
 from .db import MetadataDB
 from .ingest import citation, entities
+from .ingest import eventos as ev
 from .ingest.chunker import chunk_page
 from .ingest.pdf import iter_pages, page_count
 from .llm import get_llm
@@ -48,6 +49,21 @@ def pages_path(settings: Settings, doc_id: str):
     d = settings.data_dir / "pages"
     d.mkdir(parents=True, exist_ok=True)
     return d / f"{doc_id}.json"
+
+
+def eventos_path(settings: Settings, doc_id: str):
+    d = settings.data_dir / "eventos"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{doc_id}.json"
+
+
+def load_eventos(settings: Settings, docs: list[dict]) -> list[dict]:
+    listas = []
+    for d in docs:
+        p = eventos_path(settings, d["id"])
+        if p.exists():
+            listas.append(json.loads(p.read_text(encoding="utf-8")))
+    return ev.merge_events(listas) if listas else []
 
 
 def _resolve_numero(db: MetadataDB, doc: dict, meta: dict) -> Optional[str]:
@@ -118,6 +134,9 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         classe = doc.get("classe") or next(
             (c for c in (citation.classe_from_text(p["text"]) for p in pages[:6]) if c), "")
         pages_path(settings, doc_id).write_text(json.dumps(pages, ensure_ascii=False), encoding="utf-8")
+        eventos_doc = ev.extract_events(pages, doc_id) if sistema == "eproc" else []  # linha do tempo fixa, lida do próprio PDF
+        eventos_path(settings, doc_id).write_text(json.dumps(eventos_doc, ensure_ascii=False), encoding="utf-8")
+        meta["n_eventos"] = len(eventos_doc)
         db.update(doc_id, status="done", pages_done=total, pages_ocr=ocr_pages, metadata=meta,
                   numero_processo=numero, classe=classe, sistema=sistema)
         if numero:
@@ -165,15 +184,24 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                   "documentos": [d["filename"] for d in docs], "paginas": len(pages)}
         llm = llm_client or get_llm(settings)
         if llm is not None:
-            context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
+            evs = load_eventos(settings, docs)
+            usar_eventos = sistema == "eproc" and sum(1 for e in evs if e["data"]) >= 3  # PJe/digitalizados: contexto por páginas, como antes
+            if usar_eventos:
+                context, info = ex.select_context_eventos(pages, evs, settings.context_budget_chars)
+            else:
+                context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
             t_ia = time.perf_counter()
-            out = ex.extract_with_llm(sheet, prompt, context, llm, sistema)
+            out = ex.extract_with_llm(sheet, prompt, context, llm, sistema, com_indice=usar_eventos)
             result["medidas"] = {"contexto": info, "tokens": getattr(llm, "last_usage", None),
                                  "extracao_s": round(time.perf_counter() - t_ia, 1),
                                  "chamada": getattr(llm, "last_call", None)}
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
                           revisar=out["_revisar"], modo="llm", provedor=llm.name)
+            if usar_eventos:  # confere a cronologia da IA com os eventos reais: data do eproc, ordem e eventos inexistentes
+                obs, crono = ev.validar_cronologia(result["fields"].get("observacoes"), evs)
+                result["fields"]["observacoes"] = obs
+                result["cronologia"] = {**crono, "eventos_base": len(evs)}
             texts = [str(v) for v in result["fields"].values() if v] + list(result["citacoes"].values())
             texts += [str(v) for b in result["bens"] + result["fraudes"] for v in b.values() if v]
             result["citacoes_invalidas"] = ex.check_citations(texts, pages, sistema)

@@ -129,6 +129,17 @@
   <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
 </form></dialog>
 
+<dialog id="dlg-ev" class="wide"><form method="dialog" class="dlg">
+  <header><div><h2>Eventos do processo</h2><small class="muted" id="ev-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body">
+    <p class="muted">Lista <b>completa e fiel ao PDF</b> (lida das páginas de separação do eproc), sem IA. “Relevante” é só um filtro do sistema para escolher quais atos a IA lê por inteiro.</p>
+    <div class="filters" style="padding:0 0 8px"><div class="search"><span aria-hidden="true">🔎</span><label for="ev-q" class="sr">Filtrar eventos</label><input id="ev-q" type="search" placeholder="Filtrar por nº, data, movimento…" autocomplete="off"></div>
+      <label class="rev" style="font-size:13px"><input type="checkbox" id="ev-rel" checked> só relevantes</label><span class="muted" id="ev-count"></span></div>
+    <div class="scroll" style="max-height:52vh"><table class="plain" id="ev-tab"><thead><tr><th>Evento</th><th>Data</th><th>Movimento</th><th>Documentos</th><th>Págs.</th><th></th></tr></thead><tbody></tbody></table></div>
+  </div>
+  <footer><button class="btn" id="ev-copy" type="button">Copiar lista</button><button class="btn" id="ev-use" type="button" title="Preenche a coluna Observações com as linhas filtradas">Usar como observações</button><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
+</form></dialog>
+
 <dialog id="dlg-notes" class="wide"><form method="dialog" class="dlg">
   <header><div><h2 id="notes-title">Observações relevantes</h2><small class="muted" id="notes-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
   <div class="dlg-body"><label for="notes-text" class="sr">Observações</label><textarea id="notes-text"></textarea><p class="cit" id="notes-cit"></p></div>

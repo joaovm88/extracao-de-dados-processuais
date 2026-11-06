@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 from typing import Any, Optional
 
+from .ingest import eventos as ev
 from .ingest.entities import valid_cnpj, valid_cpf
 from .schemas import NAO_ENCONTRADO, SHEETS, Sheet
 
@@ -82,6 +83,43 @@ def select_context(pages: list[dict], budget: int, store=None, doc_ids: Optional
     return select_context_info(pages, budget, store, doc_ids)[0]
 
 
+def select_context_eventos(pages: list[dict], eventos: list[dict], budget: int) -> tuple[str, dict]:
+    """Contexto POR EVENTOS (eproc): índice completo de todos os eventos + texto integral dos atos relevantes
+    (alta, depois média relevância) até o orçamento. Mero expediente entra só no índice, de propósito."""
+    por_pg = {(p["doc_id"], p["page"]): p for p in pages}
+    ate_indice = len(ev.indice(eventos, set()))
+    orcamento_texto = max(budget - ate_indice - 6000, budget // 3)
+    com_texto: dict[int, str] = {}
+    usado, omitidos_altos = 0, 0
+    for nivel in ("alta", "media"):
+        for e in [x for x in eventos if ev.relevancia(x) == nivel]:
+            blocos = []
+            for doc_id, pg in e["paginas"]:
+                p = por_pg.get((doc_id, pg))
+                if p and not str(p.get("refs", {}).get("tipo_doc", "")).upper().startswith(ev._ANEXOS):  # anexos (estatuto, procuração…) ficam de fora
+                    blocos.append(f"=== [{p['label']}] ===\n{p['text']}")
+            texto = "\n\n".join(blocos)[:9000]
+            if not texto:
+                continue
+            if usado + len(texto) > orcamento_texto:
+                omitidos_altos += nivel == "alta"
+                continue
+            com_texto[e["evento"]] = texto
+            usado += len(texto)
+    capa = [f"=== [{p['label']}] ===\n{p['text']}" for p in pages if not p.get("refs", {}).get("evento")][:2]  # capa do processo
+    ordem = sorted(com_texto, key=lambda n: next((e["data"] or "9999", n) for e in eventos if e["evento"] == n))
+    ctx = ("ÍNDICE COMPLETO DE EVENTOS (fonte: páginas de separação do eproc; 'texto integral: sim' = o ato vem transcrito abaixo)\n"
+           + ev.indice(eventos, set(com_texto)) + ("\n\nCAPA DO PROCESSO\n" + "\n\n".join(capa) if capa else "")
+           + "\n\nTEXTO INTEGRAL DOS ATOS\n" + "\n\n".join(com_texto[n] for n in ordem))
+    enviadas = sum(1 for e in eventos if e["evento"] in com_texto for _ in e["paginas"])
+    info = {"modo": "eventos", "eventos_total": len(eventos), "eventos_com_texto": len(com_texto),
+            "eventos_relevantes": sum(1 for e in eventos if ev.relevancia(e) != "baixa"), "paginas_total": len(pages),
+            "paginas_enviadas": enviadas + len(capa), "paginas_omitidas": len(pages) - enviadas - len(capa),
+            "caracteres_total": sum(len(p["text"]) for p in pages), "caracteres_enviados": len(ctx), "orcamento": budget,
+            "cortado": omitidos_altos > 0, "atos_relevantes_omitidos": omitidos_altos}
+    return ctx, info
+
+
 def citation_rule(sistema) -> str:
     if sistema == "eproc":
         return ("- SISTEMA: eproc. Cite os atos SOMENTE como 'Evento N, pg. P' (ou 'Evento N'). NUNCA use 'ID' nem 'VOL' neste processo, "
@@ -92,7 +130,7 @@ def citation_rule(sistema) -> str:
     return "- Use apenas rótulos que existam nos trechos; omita as partes do formato (VOL/ID/Evento) que não existirem.\n"
 
 
-def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=None) -> dict:
+def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False) -> dict:
     """Chama o LLM (Gemini ou Anthropic) com saída JSON restrita ao schema da aba."""
     system = (
         load_prompt(prompt_name)
@@ -102,6 +140,9 @@ def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=
         + citation_rule(sistema) +
         "- Campos de lista fechada só aceitam os valores permitidos; se não houver base nos autos, use null.\n"
         f"- Nunca invente. Sem base no texto, use null (ou '{NAO_ENCONTRADO}' dentro de 'observacoes')."
+        + ("\n- O contexto começa com um ÍNDICE COMPLETO DE EVENTOS, que vem do próprio sistema (eproc) e é a fonte AUTORITATIVA do número, da data e do tipo de cada evento. "
+           "Só os atos marcados 'texto integral: sim' vêm transcritos; para os demais NÃO presuma o conteúdo: descreva apenas o que o índice informa ou omita o ato. "
+           "Na cronologia, cite cada ato como 'Evento N, pg. P' e use a data do índice." if com_indice else "")
     )
     return validate(sheet, llm.extract(system, f"Processo para análise:\n\n{context}", tool_schema(sheet)))
 

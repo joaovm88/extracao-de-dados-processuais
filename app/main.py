@@ -22,7 +22,8 @@ from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
 from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
-from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, pages_path, run_worker
+from .ingest import eventos as ev
+from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, load_eventos, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -166,6 +167,17 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         tp = _tpl_path(cid)
         return view.build(db.list_processes(cid), db.list(cid), tp.read_bytes() if tp.exists() else None, _estado)
 
+    @app.get("/api/cases/{cid}/processes/{numero}/eventos")
+    def process_events(cid: str, numero: str):
+        """Linha do tempo fixa do eproc (lida das páginas de separação do PDF): todos os eventos, sem IA."""
+        if not db.get_process(cid, numero):
+            raise HTTPException(404, "Processo não encontrado.")
+        evs = load_eventos(s, db.docs_for_process(cid, numero))
+        return {"total": len(evs), "eventos": [
+            {**{k: e[k] for k in ("evento", "data", "hora", "movimento", "tipo_documento", "usuario", "complemento", "docs")},
+             "data_fmt": ev.fmt_data(e["data"]), "paginas": len(e["paginas"]), "relevancia": ev.relevancia(e), "linha": ev.linha_base(e)}
+            for e in evs]}
+
     @app.get("/api/cases/{cid}/processes/{numero}")
     def get_process(cid: str, numero: str):
         p = db.get_process(cid, numero)
@@ -189,6 +201,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             res["fields"][k] = v
         if body.observacoes is not None:
             res["fields"]["observacoes"] = body.observacoes
+            res.pop("cronologia", None)  # a conferência valia para o texto da IA; o analista passou a ser o autor
         if body.bens is not None:
             res["bens"] = body.bens
         if body.fraudes is not None:

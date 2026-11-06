@@ -224,8 +224,11 @@ let longFor = null;
 function openLong(numero, key) {
   const l = row(numero); if (!l || !editable(l)) return; const col = data.abas.flatMap(a => a.colunas).find(c => c.key === key);
   longFor = {numero, key}; $('notes-title').textContent = col ? col.titulo : 'Texto'; $('notes-sub').textContent = numero; $('notes-text').value = l.valores[key] ?? '';
-  const c = l.medidas?.contexto, corte = key === 'observacoes' && c?.cortado ? `⚠ A IA viu ${c.paginas_enviadas} de ${c.paginas_total} páginas deste processo: a cronologia pode estar incompleta. ` : '';
-  $('notes-cit').textContent = corte + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
+  const c = l.medidas?.contexto, cr = l.cronologia;
+  const corte = key !== 'observacoes' || !c?.cortado ? '' : c.modo === 'eventos' ? `⚠ ${c.atos_relevantes_omitidos} ato(s) relevante(s) ficaram sem o texto integral por falta de espaço: a cronologia pode estar incompleta. `
+    : `⚠ A IA viu ${c.paginas_enviadas} de ${c.paginas_total} páginas deste processo: a cronologia pode estar incompleta. `;
+  const conf = key === 'observacoes' && cr ? `Cronologia conferida com os ${cr.eventos_base} eventos do eproc${cr.datas_corrigidas ? `: ${cr.datas_corrigidas} data(s) corrigida(s) pelo sistema` : ''}${cr.inexistentes.length ? `; ⚠ evento(s) que não existem: ${cr.inexistentes.join(', ')}` : ''}. ` : '';
+  $('notes-cit').textContent = corte + conf + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
 }
 $('notes-fmt').onclick = async () => {
   try { const r = await api('/api/format/corresponsaveis', json('POST', {texto: $('notes-text').value})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }
@@ -258,11 +261,13 @@ function renderAssistInfo() {
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
     <div class="acts">${ed ? `<button class="btn sm primary" data-toggle-rev>${l.reviewed ? '↺ Marcar como a revisar' : '✓ Marcar como revisado'}</button>` : ''}
+      ${l.n_eventos ? `<button class="btn sm" data-eventos title="Todos os eventos lidos do PDF, sem IA">📅 Eventos (${l.n_eventos})</button>` : ''}
       ${l.docs.length ? `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>` : ''}</div>
     <details class="pdfs" ${l.docs.some(d => d.status === 'error') ? 'open' : ''}><summary>PDFs deste processo (${l.docs.length})</summary>${pdfs || '<p class="muted">Nenhum PDF enviado para este processo.</p>'}</details>`;
   const q = (s) => $('assist-info').querySelector(s);
   q('[data-again]') && (q('[data-again]').onclick = () => reextract(l.numero, false));
   q('[data-reextract]') && (q('[data-reextract]').onclick = () => reextract(l.numero, true));
+  q('[data-eventos]') && (q('[data-eventos]').onclick = () => openEventos(l.numero));
   q('[data-toggle-rev]') && (q('[data-toggle-rev]').onclick = () => setReviewed(l.numero, !l.reviewed));
   $('assist-info').querySelectorAll('[data-del]').forEach(b => b.onclick = () => delDoc(b.dataset.del));
   $('assist-info').querySelectorAll('[data-retry]').forEach(b => b.onclick = () => retryDoc(b.dataset.retry));
@@ -308,6 +313,33 @@ async function addToNotes(i) {
 }
 $('chat').onsubmit = e => { e.preventDefault(); ask($('q').value); };
 
+/* ---------- eventos do processo (eproc): linha do tempo fixa, sem IA ---------- */
+let evCache = {numero: null, lista: []};
+const REL = {alta: ['ok', 'relevante'], media: ['blue', 'a verificar'], baixa: ['', 'expediente']};
+async function openEventos(numero) {
+  try { const r = await api(`/api/cases/${caseId}/processes/${enc(numero)}/eventos`); evCache = {numero, lista: r.eventos}; }
+  catch (e) { return toast(e.message, 'err'); }
+  $('ev-sub').textContent = numero; $('ev-q').value = ''; $('ev-rel').checked = true; renderEventos(); $('dlg-ev').showModal();
+}
+function evFiltrados() {
+  const t = norm($('ev-q').value).split(/\s+/).filter(Boolean), so = $('ev-rel').checked;
+  return evCache.lista.filter(e => (!so || e.relevancia !== 'baixa') && t.every(x => norm(`${e.evento} ${e.data_fmt} ${e.movimento} ${e.tipo_documento} ${e.complemento} ${e.docs.join(' ')}`).includes(x)));
+}
+function renderEventos() {
+  const L = evFiltrados(); $('ev-count').textContent = `${L.length} de ${evCache.lista.length} evento(s)`;
+  $('ev-tab').tBodies[0].innerHTML = L.map(e => { const [c, t] = REL[e.relevancia];
+    return `<tr><td><span class="num">${e.evento}</span></td><td>${esc(e.data_fmt)}</td><td>${esc(e.movimento || e.tipo_documento)}${e.complemento ? `<div class="muted">${esc(e.complemento)}</div>` : ''}</td>
+      <td>${esc(e.docs.join(', ') || '—')}</td><td>${e.paginas || '—'}</td><td><span class="tag ${c}">${t}</span></td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nenhum evento com esse filtro.</td></tr>';
+}
+$('ev-q').oninput = renderEventos; $('ev-rel').onchange = renderEventos;
+$('ev-copy').onclick = async () => { const txt = evFiltrados().map(e => e.linha).join('\n'); try { await navigator.clipboard.writeText(txt); toast('Lista copiada', 'ok'); } catch (_) { toast('Não foi possível copiar: selecione e copie manualmente', 'err'); } };
+$('ev-use').onclick = async () => {
+  const L = evFiltrados(); if (!L.length) return; const l = row(evCache.numero);
+  if (!l || !editable(l)) return toast('Este processo ainda não tem extração para receber observações. Use "Copiar lista".', 'err');
+  if ((l.valores.observacoes || '').trim() && !confirm('Substituir as observações atuais por esta lista de eventos?')) return;
+  await save(evCache.numero, 'observacoes', L.map(e => e.linha).join('\n'), null); $('dlg-ev').close();
+};
+
 /* ---------- medições: tokens, corte do contexto, tempos ---------- */
 const fmtT = x => x == null ? '—' : x < 60 ? `${Math.round(x)} s` : `${Math.floor(x / 60)} min ${Math.round(x % 60)} s`;
 const fmtN = n => n == null ? '—' : n >= 1e6 ? `${(n / 1e6).toFixed(2).replace('.', ',')} ${n >= 2e6 ? 'milhões' : 'milhão'}` : n >= 1000 ? `${(n / 1000).toFixed(1).replace('.', ',')} mil` : String(n);
@@ -327,7 +359,8 @@ function renderMed() {
       : 'Nenhum processo foi cortado: a IA viu todas as páginas. Uma busca melhor <b>não mudaria</b> a extração desses processos.'}</div>`;
   $('med-tab').tBodies[0].innerHTML = ls.map(l => { const m = l.medidas, c = m?.contexto, tk = m?.tokens, d = l.docs.map(x => x.tempos).filter(Boolean);
     return `<tr><td><span class="num">${esc(l.numero)}</span></td><td>${c ? c.paginas_total : (l.paginas ?? '—')}</td>
-      <td>${c ? `${c.paginas_enviadas} de ${c.paginas_total} ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">inteiro</span>'}<div class="muted">${fmtN(c.caracteres_enviados)} de ${fmtN(c.caracteres_total)} caracteres</div>` : '—'}</td>
+      <td>${c && c.modo === 'eventos' ? `texto integral de ${c.eventos_com_texto} de ${c.eventos_total} eventos ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">completo</span>'}<div class="muted">${c.paginas_enviadas} de ${c.paginas_total} págs. · expediente só no índice${m.cronologia ? ` · ${m.cronologia.datas_corrigidas} data(s) corrigida(s)` : ''}</div>`
+        : c ? `${c.paginas_enviadas} de ${c.paginas_total} ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">inteiro</span>'}<div class="muted">${fmtN(c.caracteres_enviados)} de ${fmtN(c.caracteres_total)} caracteres</div>` : '—'}</td>
       <td>${tk ? `${fmtN(tk.entrada)} / ${fmtN((tk.saida || 0) + (tk.raciocinio || 0))}` : '—'}</td><td>${m ? `${fmtT(m.extracao_s)}${m.chamada ? `<div class="muted" title="Modelo que respondeu: ${esc(m.chamada.modelo)}">${m.chamada.tentativas} tentativa(s)${m.chamada.espera_s ? ` · ${fmtT(m.chamada.espera_s)} de espera` : ''}</div>` : ''}` : '—'}</td>
       <td>${d.length ? `${fmtT(sum(d, t => t.total_s))}<div class="muted">OCR: ${sum(d, t => t.ocr_paginas)} pág. em ${fmtT(sum(d, t => t.ocr_s))}</div>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nenhum processo com PDF enviado ainda.</td></tr>';
 }

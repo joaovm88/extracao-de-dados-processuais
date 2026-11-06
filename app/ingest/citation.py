@@ -2,6 +2,8 @@
 import re
 from typing import Optional
 
+from .eventos import parse_separator
+
 # Nome do arquivo ex.: 0341609-70.2005.8.13.0261_V001_001-151-180.pdf
 _CNJ = re.compile(r"(\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4})")
 _VOL = re.compile(r"_V(\d+)")
@@ -49,6 +51,8 @@ def page_refs(text: str) -> dict:
         out["evento"], out["tipo_doc"], out["pg"] = m.group(1), m.group(2), m.group(3)
     elif m := _EPROC_SEP.search(text):
         out["evento"], out["sep"] = m.group(1), True
+    elif (sep := parse_separator(text)):  # separador sem 'Evento N' no topo (1ª instância): o nº vem de 'Sequência Evento'
+        out["evento"], out["sep"] = str(sep["evento"]), True
     return out
 
 

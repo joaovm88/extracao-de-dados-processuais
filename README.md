@@ -47,6 +47,7 @@ Em vez do layout padrão, importe a **planilha do próprio caso** (.xlsx). O rel
 - **DJE-SDJ / DJE-SIEF**: criadas só com cabeçalho; são preenchidas por outro setor.
 - **Outros Bens**: imóveis/veículos dados em garantia nas execuções (extraídos por IA).
 - **Alegações de Fraude**: só quando o procurador alegou e o juiz deferiu/analisou.
+- **Linha do tempo fixa (eproc):** nos PDFs do eproc, o sistema lê as *páginas de separação* de cada evento (nº, data, movimento, usuário; formatos de 2º grau e de 1ª instância) e os códigos de documento dos rodapés. Com isso monta, **sem IA**, o índice completo dos eventos (botão **📅 Eventos** no painel: filtro, copiar e *Usar como observações*). A IA recebe esse índice inteiro + o texto integral só dos atos **relevantes** (mero expediente e anexos como estatutos ficam só no índice), e a cronologia que ela escrever é **conferida**: a data é trocada pela do eproc, a lista é posta em ordem e eventos inexistentes são apontados. PJe e autos digitalizados continuam com o contexto por páginas.
 - **Execução Fiscal** gera só a **cronologia dos atos** (uma linha por ato: origem, data e descrição). Os prompts ficam em `prompts/*.md` e, no Docker, a pasta é montada: **edite o arquivo e use "Refazer extração"**, sem rebuild. Os prompts são arquivos `.md` editáveis; o layout das abas e as **listas fechadas** ficam em `app/schemas.py`.
 
 ## Citações: Evento (eproc) x ID (PJe)
