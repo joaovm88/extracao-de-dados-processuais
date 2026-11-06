@@ -30,26 +30,48 @@ def _retry_delay(e: Exception) -> Optional[float]:
     return delay if delay <= 75 else None
 
 
+TRANSIENT_BACKOFF = (10, 25, 50)
+
+
+def _is_transient(e: Exception) -> bool:
+    """Sobrecarga/indisponibilidade momentânea do serviço (HTTP 503/502/504)."""
+    txt = str(e).lower()
+    return any(k in txt for k in ("503", "502", "504", "unavailable", "high demand", "overloaded"))
+
+
 class GeminiProvider:
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str, client=None) -> None:
+    def __init__(self, api_key: str, model: str, client=None, fallback_model: str = "") -> None:
         if client is None:
             from google import genai
 
             client = genai.Client(api_key=api_key)
-        self.client, self.model = client, model
+        self.client, self.model, self.fallback_model = client, model, fallback_model
 
     def _call(self, **kw):
-        """generate_content com até 2 novas tentativas quando o limite por minuto estoura."""
-        for attempt in range(3):
-            try:
-                return self.client.models.generate_content(**kw)
-            except Exception as e:  # noqa: BLE001
-                delay = _retry_delay(e)
-                if delay is None or attempt == 2:
-                    raise
-                time.sleep(delay)
+        """generate_content com novas tentativas: limite por minuto (espera o prazo do Google) e sobrecarga
+        temporária 503 (espera 10/25/50 s). Esgotadas, tenta o modelo reserva, se houver. Outros erros sobem na hora."""
+        models = [kw["model"]]
+        if self.fallback_model and self.fallback_model != kw["model"]:
+            models.append(self.fallback_model)
+        last: Optional[Exception] = None
+        for model in models:
+            kw["model"] = model
+            for attempt in range(4):
+                try:
+                    return self.client.models.generate_content(**kw)
+                except Exception as e:  # noqa: BLE001
+                    last = e
+                    delay = _retry_delay(e)
+                    transient = _is_transient(e)
+                    if delay is None and not transient:
+                        raise  # erro que esperar não resolve (chave, modelo, cota diária, pedido inválido)
+                    if attempt == 3:
+                        break
+                    time.sleep(delay if delay is not None else TRANSIENT_BACKOFF[attempt])
+        assert last is not None
+        raise last
 
     def _config(self, system: str, **kw):
         from google.genai import types
@@ -120,7 +142,7 @@ def _loads(text: Optional[str]) -> dict:
 def get_llm(s: Settings) -> Optional[LLMProvider]:
     p = s.llm_provider
     if p == "gemini" or (p == "auto" and s.gemini_api_key):
-        return GeminiProvider(s.gemini_api_key, s.gemini_model) if s.gemini_api_key else None
+        return GeminiProvider(s.gemini_api_key, s.gemini_model, fallback_model=s.gemini_fallback_model) if s.gemini_api_key else None
     if p == "anthropic" or (p == "auto" and s.anthropic_api_key):
         return AnthropicProvider(s.anthropic_api_key, s.llm_model) if s.anthropic_api_key else None
     return None

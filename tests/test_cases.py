@@ -570,3 +570,43 @@ def test_context_budget_is_configurable(env, monkeypatch):
     assert Settings().context_budget_chars == 10
     monkeypatch.delenv("CONTEXT_BUDGET_CHARS")
     assert Settings().context_budget_chars == 400000
+
+
+def test_gemini_retries_503_overload_then_falls_back_to_reserve_model(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    esperas = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: esperas.append(s))
+    schema = ex.tool_schema(SHEETS["outras_acoes"])
+
+    class Models:
+        def __init__(self, falha_ate, so_modelo=None):
+            self.falha_ate, self.so_modelo, self.chamadas = falha_ate, so_modelo, []
+
+        def generate_content(self, model, contents, config):
+            self.chamadas.append(model)
+            if len(self.chamadas) <= self.falha_ate and (self.so_modelo is None or model == self.so_modelo):
+                raise RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    m = Models(2)  # passa na 3ª tentativa
+    assert GeminiProvider("k", "principal", SimpleNamespace(models=m)).extract("s", "u", schema) == {"observacoes": "ok"}
+    assert m.chamadas == ["principal"] * 3 and esperas == [10, 25]
+
+    esperas.clear()
+    m2 = Models(99, so_modelo="principal")  # principal nunca responde; reserva sim
+    out = GeminiProvider("k", "principal", SimpleNamespace(models=m2), fallback_model="reserva").extract("s", "u", schema)
+    assert out == {"observacoes": "ok"} and m2.chamadas == ["principal"] * 4 + ["reserva"] and esperas == [10, 25, 50]
+
+    m3 = Models(99)  # sem reserva: 4 tentativas e falha com a mensagem original
+    with pytest.raises(RuntimeError, match="high demand"):
+        GeminiProvider("k", "principal", SimpleNamespace(models=m3)).extract("s", "u", schema)
+    assert len(m3.chamadas) == 4
+
+    m4 = Models(99)  # erro que esperar não resolve (chave inválida) sobe na hora, sem esperar nem usar reserva
+    m4.generate_content = lambda **k: (_ for _ in ()).throw(RuntimeError("403 PERMISSION_DENIED api key"))
+    esperas.clear()
+    with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
+        GeminiProvider("k", "principal", SimpleNamespace(models=m4), fallback_model="reserva").extract("s", "u", schema)
+    assert esperas == []
