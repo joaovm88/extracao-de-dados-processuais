@@ -86,7 +86,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.get("/api/tipos")
     def tipos():
-        return {"tipos": {k: v[0] for k, v in TIPOS.items()}, "sistemas": SISTEMAS}
+        campos = {k: {f.key: {"titulo": f.header.strip(), "opcoes": f.options} for f in sh.ai_fields} for k, sh in SHEETS.items()}
+        return {"tipos": {k: v[0] for k, v in TIPOS.items()}, "sistemas": SISTEMAS, "campos": campos}
 
     # ---- casos (devedor)
     @app.post("/api/cases", status_code=201)
@@ -194,7 +195,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"Planilha inválida: {e}")
         _tpl_path(cid).write_bytes(data)
-        return analysis
+        try:  # os processos do caso vêm da própria planilha (aba Mcfly ou Relatório)
+            rows = tpl.registry(data)
+        except Exception:  # noqa: BLE001
+            rows = []
+        for r in rows:
+            db.upsert_process(cid, r["numero"], r)
+        return {**analysis, "processos_importados": len(rows)}
 
     @app.get("/api/cases/{cid}/template")
     def get_template(cid: str):

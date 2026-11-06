@@ -13,7 +13,7 @@ from typing import Optional
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
-from .schemas import MCFLY_MAP, SHEETS, classify
+from .schemas import SHEETS, classify
 
 PENDING = PatternFill("solid", fgColor="FFF3CD")  # linhas ainda não revisadas
 
@@ -202,3 +202,32 @@ def fill(data: bytes, processes: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def registry(data: bytes) -> list[dict]:
+    """Processos do caso lidos da própria planilha-modelo: aba 'Mcfly' (export do SAJ) se existir;
+    senão a aba 'Relatório' (nº, polos, classe, juízo…). Alimenta a capa e a escolha do prompt por classe."""
+    from .mcfly import _fmt, read_mcfly
+
+    wb = load_workbook(io.BytesIO(data), data_only=True)
+    if "Mcfly" in wb.sheetnames:
+        try:
+            rows = read_mcfly(io.BytesIO(data))
+            if rows:
+                return rows
+        except ValueError:  # aba Mcfly sem a coluna do nº do processo
+            pass
+    for ws in wb.worksheets:
+        if sheet_kind(ws.title) != "relatorio":
+            continue
+        found = _find_header_row(ws, _header_map("relatorio"))
+        if not found:
+            break
+        hrow, cols, _ = found
+        out = []
+        for r in range(hrow + 1, ws.max_row + 1):
+            rec = {key: _fmt(ws.cell(r, c).value) for c, key in cols.items()}
+            if rec.get("numero"):
+                out.append(rec)
+        return out
+    return []

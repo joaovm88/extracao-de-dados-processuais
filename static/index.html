@@ -7,66 +7,104 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header class="topbar"><div class="wrap">
-  <span class="brand"><b>Análise de Processos</b> <span class="sep"></span> Relatórios de execução e penhoras</span>
-  <span class="user" id="llm"></span>
+<header class="topbar"><div class="wrap bar">
+  <a class="brand" href="#" id="home"><span class="logo" aria-hidden="true">§</span><span><b>Análise de Processos</b><small>Relatórios de execução e penhoras</small></span></a>
+  <span class="chip" id="llm" title="Provedor de IA configurado">IA…</span>
 </div></header>
-<nav class="crumbs wrap" aria-label="Você está aqui"><a href="#" id="home">Casos</a><span id="crumb"></span></nav>
 
+<!-- LISTA DE CASOS -->
 <main class="wrap" id="view-cases">
-  <h1>Casos</h1>
-  <p class="lead">Cada caso reúne os processos de um devedor e gera uma única planilha de relatório.</p>
-  <form id="new-case" class="inline">
+  <div class="page-head"><div><h1>Casos</h1><p class="lead">Cada caso reúne os processos de um devedor ou grupo e gera <b>uma única planilha</b>.</p></div></div>
+  <form id="new-case" class="card inline">
     <label for="case-name" class="sr">Nome do caso</label>
-    <input id="case-name" type="text" placeholder="Ex.: Recapagem Alterosa Ltda." required>
+    <input id="case-name" type="text" placeholder="Nome do devedor ou grupo, ex.: Recapagem Alterosa Ltda." required>
     <button class="btn primary">Criar caso</button>
   </form>
-  <ul id="cases" class="cards"></ul>
+  <ul id="cases" class="cases"></ul>
 </main>
 
+<!-- ÁREA DE TRABALHO DO CASO -->
 <main class="wrap hidden" id="view-case">
-  <h1 id="case-title"></h1>
-  <div class="grid">
-    <section class="card">
-      <h2>1. Cadastro dos processos (export do Mcfly)</h2>
-      <p class="hint">Importe o export do Mcfly: preenche capa, polos, classe, juízo e inscrições, e define o modelo de relatório de cada processo.</p>
-      <input type="file" id="mcfly" accept=".xlsx"> <button class="btn" id="mcfly-btn">Importar</button>
-      <h2>Planilha-modelo do caso <small>(opcional)</small></h2>
-      <p class="hint">Importe a planilha do caso (.xlsx). O relatório final será uma <b>cópia dela, preenchida</b>: abas e colunas reconhecidas são preenchidas, as demais voltam intactas. Linhas que já existem só recebem as células vazias.</p>
-      <input type="file" id="tpl" accept=".xlsx"> <button class="btn" id="tpl-btn">Importar modelo</button> <button class="btn" id="tpl-del" hidden>Remover modelo</button>
-      <div id="tpl-report" class="hint" role="status"></div>
-      <h2>2. PDFs dos processos</h2>
-      <p class="hint">Pode enviar várias partes do mesmo processo (volumes, <code>PARTE_2</code>): elas viram <b>uma só linha</b> no relatório. O nº do processo, o volume e a página inicial são lidos do nome do arquivo (ex.: <code>0341609-70.2005.8.13.0261_V001_001-151-180.pdf</code>).</p>
-      <div class="grid2">
-        <div class="field"><label for="tipo">Tipo do processo</label><select id="tipo"><option value="">Automático (pela classe do Mcfly)</option></select></div>
-        <div class="field"><label for="sistema">Sistema do processo</label><select id="sistema"><option value="">Automático</option></select></div>
-      </div>
-      <p class="hint">O tipo escolhe o prompt. O sistema define a citação: eproc cita <b>Evento</b>; PJe cita <b>ID</b>.</p>
-      <input type="file" id="pdfs" accept="application/pdf" multiple> <button class="btn primary" id="pdfs-btn">Enviar</button>
-      <p class="hint" id="msg" role="status"></p>
-      <h2>3. Relatório</h2>
-      <a class="btn primary" id="export" href="#">Baixar planilha (.xlsx)</a>
-      <p class="hint">Linhas em amarelo ainda não foram revisadas por um analista.</p>
-    </section>
-    <section class="card">
-      <h2>Assistente (consulta ao processo)</h2>
-      <div id="log" aria-live="polite"><p class="hint">Selecione um processo e pergunte, por exemplo: “Existe valor bloqueado pelo SISBAJUD?”</p></div>
-      <form class="inline" id="chat"><input id="q" type="text" placeholder="Pergunte sobre o processo selecionado…" autocomplete="off"><button class="btn">Perguntar</button></form>
-    </section>
+  <div class="page-head">
+    <div>
+      <nav class="crumbs" aria-label="Você está aqui"><a href="#" id="crumb-home">Casos</a> <span>›</span> <span id="crumb"></span></nav>
+      <h1 id="case-title"></h1>
+    </div>
+    <a class="btn primary big" id="export" href="#">⬇ Baixar planilha (.xlsx)</a>
   </div>
-  <section class="card">
-    <h2>Processos</h2>
-    <div class="scroll"><table id="procs"><thead><tr><th>Nº do processo</th><th>Classe</th><th>Modelo</th><th>PDFs</th><th>Situação</th><th></th></tr></thead><tbody></tbody></table></div>
-    <p class="hint" id="orphans"></p>
+
+  <ol class="steps" id="steps" aria-label="Etapas">
+    <li id="st-1"><i>1</i><span><b>Planilha-modelo</b><small id="st-1t"></small></span></li>
+    <li id="st-2"><i>2</i><span><b>PDFs</b><small id="st-2t"></small></span></li>
+    <li id="st-3"><i>3</i><span><b>Revisão</b><small id="st-3t"></small></span></li>
+    <li id="st-4"><i>4</i><span><b>Relatório</b><small id="st-4t"></small></span></li>
+  </ol>
+
+  <section class="setup">
+    <div class="card" id="card-tpl">
+      <h2>1 · Planilha-modelo <span class="chip" id="tpl-chip" hidden></span></h2>
+      <p class="hint">Importe a planilha do caso (.xlsx). Os processos são lidos da aba <b>Mcfly</b> (ou <b>Relatório</b>) e o relatório final sai como <b>cópia dela, preenchida</b>. Linhas que já existem só recebem as células vazias.</p>
+      <div class="filebar">
+        <input type="file" id="tpl" accept=".xlsx" class="sr"><label for="tpl" class="btn">Escolher planilha</label>
+        <span class="filename" id="tpl-name">nenhum arquivo</span>
+        <button class="btn primary" id="tpl-btn">Importar</button>
+        <button class="btn danger-ghost" id="tpl-del" hidden>Remover</button>
+      </div>
+      <p class="msg" id="tpl-msg" role="status"></p>
+      <details id="tpl-details" hidden><summary>Ver como a planilha foi reconhecida</summary><div id="tpl-report"></div></details>
+    </div>
+
+    <div class="card" id="card-up">
+      <h2>2 · Enviar PDFs</h2>
+      <div class="selects">
+        <div><label for="tipo">Tipo do processo</label><select id="tipo"><option value="">Automático (pela classe)</option></select></div>
+        <div><label for="sistema">Sistema</label><select id="sistema"><option value="">Automático</option></select></div>
+      </div>
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Arraste PDFs aqui ou clique para escolher">
+        <input type="file" id="pdfs" accept="application/pdf" multiple class="sr">
+        <b>Arraste os PDFs aqui</b><span>ou clique para escolher · várias partes do mesmo processo viram uma só linha</span>
+        <div id="picked" class="picked"></div>
+      </div>
+      <div class="filebar"><button class="btn primary" id="pdfs-btn" disabled>Enviar PDFs</button><span class="msg" id="msg" role="status"></span></div>
+    </div>
   </section>
-  <section class="card">
-    <h2>PDFs enviados</h2>
-    <div class="scroll"><table id="docs"><thead><tr><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div>
-  </section>
-  <section class="card hidden" id="review">
-    <h2>Revisão da extração <small id="rev-title"></small></h2>
-    <p class="hint">Confira cada campo com a citação indicada. Nada vai para a planilha sem passar por você: marque como revisado ao terminar.</p>
-    <form id="rev-form"></form>
+
+  <section class="workspace">
+    <div class="main-col">
+      <div class="card">
+        <div class="card-head"><h2>Processos</h2><span class="count" id="count"></span></div>
+        <div class="scroll"><table id="procs"><thead><tr><th>Processo</th><th>Classe</th><th>Modelo</th><th>PDFs</th><th>Situação</th></tr></thead><tbody></tbody></table></div>
+        <p class="hint" id="orphans"></p>
+      </div>
+      <details class="card" id="docs-card">
+        <summary><h2 style="display:inline">PDFs enviados</h2> <span class="count" id="docs-count"></span></summary>
+        <div class="scroll"><table id="docs"><thead><tr><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div>
+      </details>
+    </div>
+
+    <aside class="side card" id="side" aria-live="polite">
+      <div class="empty" id="side-empty">
+        <div class="empty-ico" aria-hidden="true">📄</div>
+        <b>Selecione um processo</b>
+        <p>Clique em uma linha <b>pronta</b> para revisar a extração e conversar com o assistente sobre aquele processo.</p>
+      </div>
+      <div id="side-body" hidden>
+        <div class="side-head">
+          <div><small>Processo</small><h2 id="side-title"></h2><div id="side-chips" class="chips"></div></div>
+          <button class="icon" id="side-close" aria-label="Fechar painel">✕</button>
+        </div>
+        <div class="tabs" role="tablist">
+          <button role="tab" id="tab-rev" class="on" aria-selected="true">Revisão</button>
+          <button role="tab" id="tab-chat" aria-selected="false">Assistente</button>
+        </div>
+        <section id="pane-rev"><form id="rev-form"></form></section>
+        <section id="pane-chat" hidden>
+          <div id="suggest" class="suggest"></div>
+          <div id="log" class="log"></div>
+          <form id="chat" class="chatbar"><input id="q" type="text" placeholder="Pergunte sobre este processo…" autocomplete="off"><button class="btn primary" id="ask">Enviar</button></form>
+        </section>
+      </div>
+    </aside>
   </section>
 </main>
 <script src="/app.js"></script>

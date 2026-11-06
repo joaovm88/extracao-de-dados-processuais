@@ -114,3 +114,39 @@ def test_api_template_flow_warns_and_export_uses_the_copy(tmp_path, monkeypatch)
         assert c.delete(f"/api/cases/{case['id']}/template").json() == {"ativo": False}
         wb2 = load_workbook(io.BytesIO(c.get(f"/api/cases/{case['id']}/spreadsheet").content))
         assert "Recuperação Judicial" not in wb2.sheetnames  # sem modelo: layout padrão
+
+
+def test_template_registers_the_cases_processes_without_a_separate_mcfly_import(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    with TestClient(create_app(Settings())) as c:
+        # 1) sem aba Mcfly com dados: os processos vêm da aba Relatório
+        case = c.post("/api/cases", json={"nome": "A"}).json()
+        r = c.post(f"/api/cases/{case['id']}/template", files={"file": ("m.xlsx", modelo())}).json()
+        assert r["processos_importados"] == 1
+        p = c.get(f"/api/cases/{case['id']}").json()["processos"]
+        assert p[0]["numero"] == "0341609-70.2005.8.13.0261" and p[0]["mcfly"]["classe"] == "Execução Fiscal (SIDA)"
+        assert p[0]["estado"] == "sem_pdf"
+
+        # 2) com aba Mcfly preenchida: ela tem prioridade (export do SAJ)
+        wb = load_workbook(io.BytesIO(modelo()))
+        mc = wb["Mcfly"]
+        mc.append(["0000009-00.2021.4.01.0000", "Embargos à Execução Fiscal"])
+        mc.append(["0000010-00.2021.4.01.0000", "Apelação"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        case2 = c.post("/api/cases", json={"nome": "B"}).json()
+        r2 = c.post(f"/api/cases/{case2['id']}/template", files={"file": ("m.xlsx", buf.getvalue())}).json()
+        assert r2["processos_importados"] == 2
+        nums = {x["numero"]: x["mcfly"]["classe"] for x in c.get(f"/api/cases/{case2['id']}").json()["processos"]}
+        assert nums == {"0000009-00.2021.4.01.0000": "Embargos à Execução Fiscal", "0000010-00.2021.4.01.0000": "Apelação"}
+
+
+def test_tipos_endpoint_exposes_field_titles_and_closed_lists_for_the_ui(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    with TestClient(create_app(Settings())) as c:
+        t = c.get("/api/tipos").json()
+    g = t["campos"]["execucoes_fiscais"]["garantia"]
+    assert g["titulo"] == "EXIT. GARANTIA" and "IMÓVEL" in g["opcoes"]
+    assert t["campos"]["execucoes_fiscais"]["observacoes"]["opcoes"] is None

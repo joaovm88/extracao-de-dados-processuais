@@ -19,11 +19,11 @@ Em vez do layout padrão, importe a **planilha do próprio caso** (.xlsx). O rel
 - Abas reconhecidas (Relatório, Execuções Fiscais, Outras Ações, Embargos, Outros Bens, Alegações de Fraude) são preenchidas pelo texto do cabeçalho; as demais (DJE-SDJ/SIEF, Mcfly, Recuperação Judicial, Filtros…) voltam **intactas**.
 - Processo que já tem linha: só as **células vazias** são preenchidas. Processo novo: linha acrescentada ao final.
 - A tela avisa colunas não reconhecidas (ficam em branco), abas com layout diferente (ex.: Outros Bens em blocos por matrícula) e abas que o modelo não tem.
-- O Mcfly é importado em separado (export do SAJ). Ao salvar, o openpyxl pode perder elementos avançados (gráficos, imagens); fórmulas e formatação comuns são mantidas.
+- Não há mais um passo separado de "cadastro Mcfly": a própria planilha-modelo registra os processos. (O endpoint `POST /api/cases/{id}/mcfly` continua na API, sem botão na tela.) Ao salvar, o openpyxl pode perder elementos avançados (gráficos, imagens); fórmulas e formatação comuns são mantidas.
 
 ## Fluxo de trabalho
 1. **Criar um caso** (um devedor / grupo econômico).
-2. **Importar o Mcfly** (`.xlsx`): preenche a capa (polos, classe, juízo, procuradoria, inscrições, data do protocolo) e define, pela *classe*, qual aba e qual prompt valem para cada processo.
+2. **Importar a planilha-modelo** do caso (`.xlsx`): os processos são lidos da aba **Mcfly** (export do SAJ) ou, se ela estiver vazia, da aba **Relatório**. Isso preenche a capa (polos, classe, juízo, procuradoria, inscrições, data do protocolo) e define, pela *classe*, qual aba e qual prompt valem para cada processo.
 3. **Enviar os PDFs** escolhendo o **tipo** (Execução Fiscal, Embargos, Apelação/Recurso, Agravo, Outras ações), que seleciona o prompt, e o **sistema** (eproc/PJe, ou automático). O nº do processo, o volume e a página inicial vêm do nome do arquivo (`0341609-70.2005.8.13.0261_V001_001-151-180.pdf` → VOL 001, a partir da pg. 151). Os trechos são citados como `Evento N, VOL N, pg. N, ID N` (evento/ID quando o PDF os traz).
 4. **Revisar** a extração de cada processo (campos com lista fechada são validados; fora da lista o campo fica vazio e é sinalizado).
 5. **Baixar a planilha**: abas Relatório, DJE-SDJ, DJE-SIEF, Execuções Fiscais, Outras Ações, Embargos à Execução, Outros Bens, Alegações de Fraude, com os mesmos cabeçalhos do modelo. Linhas ainda não revisadas saem em amarelo.
