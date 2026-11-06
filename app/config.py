@@ -13,9 +13,13 @@ class Settings:
         # LLM: "auto" escolhe Gemini (Google AI Studio) se houver chave, senão Anthropic, senão nenhum
         self.llm_provider = env("LLM_PROVIDER", "auto").lower()
         self.gemini_api_key = env("GEMINI_API_KEY", "") or env("GOOGLE_API_KEY", "")
-        self.gemini_model = env("GEMINI_MODEL", "gemini-2.5-pro")
+        self.gemini_model = env("GEMINI_MODEL", "gemini-3.1-pro-preview")
+        # Modelo reserva usado só quando o principal fica sobrecarregado (503) após as novas tentativas. Opcional.
+        self.gemini_fallback_model = env("GEMINI_FALLBACK_MODEL", "")
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")
         self.llm_model = env("LLM_MODEL", "claude-sonnet-5-5")
+        # Texto máximo enviado ao LLM por processo (≈ 4 caracteres por token). Reduza no nível gratuito do Gemini.
+        self.context_budget_chars = int(env("CONTEXT_BUDGET_CHARS", "400000"))
         self.ocr_lang = env("OCR_LANG", "por")
         self.ocr_dpi = int(env("OCR_DPI", "200"))
         self.min_text_chars = int(env("MIN_TEXT_CHARS", "40"))

@@ -14,9 +14,16 @@ O relatório é **por caso** (devedor/grupo): uma única planilha com todos os p
 - Chegou parte nova num processo já **revisado**: ele fica "desatualizado" e suas edições são preservadas; "Refazer extração" reprocessa tudo (descarta as edições).
 - Validado com os 5 PDFs de um processo físico (204 páginas): 1 processo, 1 chamada ao LLM, contexto com as 204 páginas em ordem.
 
+## Planilha-modelo do caso (opcional)
+Em vez do layout padrão, importe a **planilha do próprio caso** (.xlsx). O relatório final é uma **cópia dela, preenchida**:
+- Abas reconhecidas (Relatório, Execuções Fiscais, Outras Ações, Embargos, Outros Bens, Alegações de Fraude) são preenchidas pelo texto do cabeçalho; as demais (DJE-SDJ/SIEF, Mcfly, Recuperação Judicial, Filtros…) voltam **intactas**.
+- Processo que já tem linha: só as **células vazias** são preenchidas. Processo novo: linha acrescentada ao final.
+- A tela avisa colunas não reconhecidas (ficam em branco), abas com layout diferente (ex.: Outros Bens em blocos por matrícula) e abas que o modelo não tem.
+- Não há mais um passo separado de "cadastro Mcfly": a própria planilha-modelo registra os processos. (O endpoint `POST /api/cases/{id}/mcfly` continua na API, sem botão na tela.) Ao salvar, o openpyxl pode perder elementos avançados (gráficos, imagens); fórmulas e formatação comuns são mantidas.
+
 ## Fluxo de trabalho
 1. **Criar um caso** (um devedor / grupo econômico).
-2. **Importar o Mcfly** (`.xlsx`): preenche a capa (polos, classe, juízo, procuradoria, inscrições, data do protocolo) e define, pela *classe*, qual aba e qual prompt valem para cada processo.
+2. **Importar a planilha-modelo** do caso (`.xlsx`): os processos são lidos da aba **Mcfly** (export do SAJ) ou, se ela estiver vazia, da aba **Relatório**. Isso preenche a capa (polos, classe, juízo, procuradoria, inscrições, data do protocolo) e define, pela *classe*, qual aba e qual prompt valem para cada processo.
 3. **Enviar os PDFs** escolhendo o **tipo** (Execução Fiscal, Embargos, Apelação/Recurso, Agravo, Outras ações), que seleciona o prompt, e o **sistema** (eproc/PJe, ou automático). O nº do processo, o volume e a página inicial vêm do nome do arquivo (`0341609-70.2005.8.13.0261_V001_001-151-180.pdf` → VOL 001, a partir da pg. 151). Os trechos são citados como `Evento N, VOL N, pg. N, ID N` (evento/ID quando o PDF os traz).
 4. **Revisar** a extração de cada processo (campos com lista fechada são validados; fora da lista o campo fica vazio e é sinalizado).
 5. **Baixar a planilha**: abas Relatório, DJE-SDJ, DJE-SIEF, Execuções Fiscais, Outras Ações, Embargos à Execução, Outros Bens, Alegações de Fraude, com os mesmos cabeçalhos do modelo. Linhas ainda não revisadas saem em amarelo.
@@ -60,6 +67,22 @@ pip install -r requirements-dev.txt
 uvicorn app.main:app --reload
 python -m pytest
 ```
+
+## Escolher o modelo do Gemini
+O Google retira modelos antigos para contas novas (ex.: `gemini-2.5-pro` respondeu "no longer available to new users"). O padrão do projeto é `gemini-3.1-pro-preview`; mude em `GEMINI_MODEL` no `.env`. Para listar os modelos que a **sua** chave enxerga (com o sistema parado):
+```bash
+docker compose run --rm --no-deps api python -c "import os; from google import genai; c = genai.Client(api_key=os.environ['GEMINI_API_KEY']); [print(m.name) for m in c.models.list()]"
+```
+Use um nome da lista sem o prefixo `models/`. Modelos "preview" têm limites menores no nível gratuito.
+
+**Nível gratuito: modelos Pro têm cota zero.** Em https://aistudio.google.com/rate-limit cada modelo mostra RPM / TPM / RPD. Um modelo com `0 / 0 / 0` (ex.: Gemini 3.1 Pro, 2.5 Pro) recusa qualquer pedido com 429. Use um **Flash ou Flash-Lite** com cota maior que zero. Cada extração é **1 pedido** (RPD) e ~25 a 100 mil tokens de entrada (TPM).
+
+**Erro 503 "high demand"/indisponível:** sobrecarga momentânea do Google. O sistema tenta de novo sozinho (esperas de 10, 25 e 50 s) e, se `GEMINI_FALLBACK_MODEL` estiver definido, usa esse modelo reserva; senão, use "Tentar novamente" em alguns minutos.
+
+**Erro 429 / "Limite de uso do Gemini atingido"** (comum no nível gratuito com processos de centenas de páginas):
+1. Use um modelo "flash" da lista (limites maiores).
+2. Reduza o texto enviado por processo com `CONTEXT_BUDGET_CHARS` no `.env` (4 caracteres ≈ 1 token; `100000` ≈ 25 mil tokens). O sistema então manda só os trechos mais relevantes e as páginas finais; confira o resultado na revisão.
+3. Limite por minuto com prazo ("retry in 30s"): o sistema espera e tenta de novo sozinho (até 2 vezes). Cota diária esgotada ou plano sem cota: só esperar o dia seguinte ou ativar faturamento.
 
 ## Limitações / pendências
 - Lista fechada de `EXIT. GARANTIA`: só IMÓVEL e BACEN C/DJE vieram do modelo; o resto (VEÍCULO, FIANÇA/SEGURO GARANTIA, OUTROS, NÃO HÁ) é suposição em `app/schemas.py`.
