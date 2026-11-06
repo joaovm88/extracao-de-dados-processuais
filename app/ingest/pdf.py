@@ -1,5 +1,6 @@
 """Leitura de PDFs: texto nato-digital quando existe, OCR quando a página é imagem."""
 import io
+import time
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -14,6 +15,7 @@ class PageResult:
     number: int  # 1-based
     text: str
     method: str  # "text" | "ocr" | "ocr_unavailable" | "empty" | "text_degraded"
+    seconds: float = 0.0  # tempo gasto para ler a página (texto ou OCR)
 
 
 def ocr_available() -> bool:
@@ -36,7 +38,15 @@ def _ocr_page(page: "fitz.Page", settings: Settings) -> str:
 
 
 def iter_pages(path: str, settings: Settings) -> Iterator[PageResult]:
-    """Gera uma página por vez (não carrega milhares de páginas em memória)."""
+    """Gera uma página por vez (não carrega milhares de páginas em memória), medindo o tempo de cada uma."""
+    last = time.perf_counter()
+    for pr in _iter_pages_raw(path, settings):
+        pr.seconds = time.perf_counter() - last  # só o trabalho de leitura/OCR; o tempo do consumidor fica de fora
+        yield pr
+        last = time.perf_counter()
+
+
+def _iter_pages_raw(path: str, settings: Settings) -> Iterator[PageResult]:
     has_ocr = ocr_available()
     with fitz.open(path) as doc:
         for i, page in enumerate(doc, start=1):

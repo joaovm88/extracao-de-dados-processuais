@@ -118,9 +118,10 @@ function renderGrid() {
   table.innerHTML = `<thead><tr><th>Processo</th>${cols.map(c => `<th title="${esc(c.titulo)}">${esc(c.titulo)}</th>`).join('')}</tr></thead><tbody>${linhas.map(l => {
     const [cls, txt] = ESTADO[l.estado], ed = editable(l), waiting = ['extraindo', 'aguardando'].includes(l.estado);
     const rc = (l.numero === sel ? 'sel ' : '') + (l.estado === 'erro' ? 'bad' : ed && l.reviewed ? 'okrow' : ed ? 'pend' : '');
+    const cut = l.medidas?.contexto?.cortado ? `<span class="tag warn" title="A IA viu ${l.medidas.contexto.paginas_enviadas} de ${l.medidas.contexto.paginas_total} páginas (limite de contexto)">cortado</span>` : '';
     const warn = l.citacoes_invalidas.length ? `<span class="tag err" title="Citações que não existem no PDF: ${esc(l.citacoes_invalidas.join('; '))}">⚠ citação</span>` : '';
     return `<tr data-n="${esc(l.numero)}" class="${rc}"><td class="first"><span class="num">${esc(l.numero)}</span>
-      <div class="sub"><span class="tag ${cls}">${txt}</span>${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> revisado</label>` : ''}</div></td>
+      <div class="sub"><span class="tag ${cls}">${txt}</span>${cut}${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> revisado</label>` : ''}</div></td>
       ${cols.map(c => cell(l, c, ed, waiting)).join('')}</tr>`;
   }).join('')}</tbody>`;
   if (!linhas.length) emptyGrid(todas.length ? 'Nenhum processo corresponde ao filtro' : 'Nenhum processo nesta aba', todas.length ? 'Ajuste ou limpe o filtro acima.' : 'Importe a planilha-modelo e envie PDFs (botão "Upload de Processo" no topo, ou arraste os arquivos para cá).');
@@ -204,7 +205,7 @@ function renderAssistInfo() {
       ${d.error ? `<div class="er">${esc(d.error)}</div>` : ''}<button class="icon-btn" data-retry="${d.id}" title="Reprocessar este PDF" aria-label="Reprocessar">⟳</button><button class="icon-btn" data-del="${d.id}" title="Excluir este PDF" aria-label="Excluir">🗑</button></div>`; }).join('');
   $('assist-info').innerHTML = `<div class="info-top"><span class="num">${esc(l.numero)}</span><span class="tag ${cls}">${txt}</span>
       ${ed ? `<span class="tag ${l.reviewed ? 'ok' : 'blue'}">${l.reviewed ? 'revisado' : 'a revisar'}</span>` : ''}
-      ${l.modelo ? `<span class="chip">${esc(MODELO[l.modelo] || l.modelo)}</span>` : ''}${l.sistema ? `<span class="chip">${esc(l.sistema)}</span>` : ''}${l.paginas ? `<span class="chip">${l.paginas} págs.</span>` : ''}</div>
+      ${l.modelo ? `<span class="chip">${esc(MODELO[l.modelo] || l.modelo)}</span>` : ''}${l.sistema ? `<span class="chip">${esc(l.sistema)}</span>` : ''}${l.paginas ? `<span class="chip">${l.paginas} págs.</span>` : ''}${l.medidas ? `<span class="chip" title="Páginas enviadas à IA e tokens da extração">IA viu ${l.medidas.contexto.paginas_enviadas}/${l.medidas.contexto.paginas_total} págs. · ${fmtN(l.medidas.tokens?.entrada)} tokens</span>` : ''}</div>
     ${l.error ? `<div class="alert err"><b>Erro na extração.</b> ${esc(l.error)}${l.docs.length ? `<br><button class="btn sm" data-again>Tentar novamente</button>` : ''}</div>` : ''}
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
@@ -258,6 +259,29 @@ async function addToNotes(i) {
   catch (e) { toast(e.message, 'err'); }
 }
 $('chat').onsubmit = e => { e.preventDefault(); ask($('q').value); };
+
+/* ---------- medições: tokens, corte do contexto, tempos ---------- */
+const fmtT = x => x == null ? '—' : x < 60 ? `${Math.round(x)} s` : `${Math.floor(x / 60)} min ${Math.round(x % 60)} s`;
+const fmtN = n => n == null ? '—' : n >= 1e6 ? `${(n / 1e6).toFixed(2).replace('.', ',')} ${n >= 2e6 ? 'milhões' : 'milhão'}` : n >= 1000 ? `${(n / 1000).toFixed(1).replace('.', ',')} mil` : String(n);
+function renderMed() {
+  const ls = data.linhas, com = ls.filter(l => l.medidas), cortados = com.filter(l => l.medidas.contexto.cortado);
+  const sum = (a, f) => a.reduce((t, x) => t + (f(x) || 0), 0), docs = ls.flatMap(l => l.docs.map(d => d.tempos).filter(Boolean));
+  const tin = sum(com, l => l.medidas.tokens?.entrada), tout = sum(com, l => (l.medidas.tokens?.saida || 0) + (l.medidas.tokens?.raciocinio || 0));
+  const ocrP = sum(docs, t => t.ocr_paginas), ocrS = sum(docs, t => t.ocr_s);
+  $('med-sum').innerHTML = `<ul class="med">
+    <li><b>${cortados.length} de ${com.length}</b> processo(s) extraído(s) foram <b>cortados</b>: não couberam no limite enviado à IA.</li>
+    <li>Tokens gastos nas extrações: <b>${fmtN(tin)}</b> de entrada e <b>${fmtN(tout)}</b> de saída.</li>
+    <li>Tempo de leitura dos PDFs: <b>${fmtT(sum(docs, t => t.total_s))}</b> (OCR: ${ocrP} página(s) em ${fmtT(ocrS)}). Tempo de IA: <b>${fmtT(sum(com, l => l.medidas.extracao_s))}</b>.</li></ul>
+    <div class="alert ${cortados.length ? 'warn' : 'ok'}">${!com.length ? 'Ainda não há extrações com medição. Processos extraídos antes desta versão não têm esses dados: use “Refazer extração”.'
+      : cortados.length ? `Nos processos cortados a IA não viu todas as páginas. Se isso acontece em <b>muitos</b> processos, vale testar uma busca de páginas melhor (EmbeddingGemma 2); se for em poucos, aumentar <code>CONTEXT_BUDGET_CHARS</code> (quando a cota permitir) já resolve.`
+      : 'Nenhum processo foi cortado: a IA viu todas as páginas. Uma busca melhor <b>não mudaria</b> a extração desses processos.'}</div>`;
+  $('med-tab').tBodies[0].innerHTML = ls.map(l => { const m = l.medidas, c = m?.contexto, tk = m?.tokens, d = l.docs.map(x => x.tempos).filter(Boolean);
+    return `<tr><td><span class="num">${esc(l.numero)}</span></td><td>${c ? c.paginas_total : (l.paginas ?? '—')}</td>
+      <td>${c ? `${c.paginas_enviadas} de ${c.paginas_total} ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">inteiro</span>'}<div class="muted">${fmtN(c.caracteres_enviados)} de ${fmtN(c.caracteres_total)} caracteres</div>` : '—'}</td>
+      <td>${tk ? `${fmtN(tk.entrada)} / ${fmtN((tk.saida || 0) + (tk.raciocinio || 0))}` : '—'}</td><td>${m ? fmtT(m.extracao_s) : '—'}</td>
+      <td>${d.length ? `${fmtT(sum(d, t => t.total_s))}<div class="muted">OCR: ${sum(d, t => t.ocr_paginas)} pág. em ${fmtT(sum(d, t => t.ocr_s))}</div>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Sem processos.</td></tr>';
+}
+$('btn-med').onclick = () => { renderMed(); $('dlg-med').showModal(); };
 
 /* ---------- janelas: upload, modelo, PDFs ---------- */
 function renderPicked() {

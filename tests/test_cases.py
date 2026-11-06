@@ -19,6 +19,7 @@ NUM = "0341609-70.2005.8.13.0261"
 class FakeLLM:
     """Provedor falso: devolve o payload e registra as chamadas."""
     name = "fake"
+    last_usage = {"entrada": 1000, "saida": 50, "raciocinio": None}
 
     def __init__(self, payload):
         self.payload, self.calls = payload, []
@@ -674,3 +675,76 @@ def test_corresponsaveis_several_people_on_the_same_line():
     assert f(texto) == ("BETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81\nJoão Victor - CPF: 529.982.247-25\nMARIA SOUZA - CPF: 987.654.321-00")
     assert f("Ana (CPF 52998224725), Bruno (CPF 11144477735) e Carla CNPJ 11222333000181") == (
         "Ana - CPF: 529.982.247-25\nBruno - CPF: 111.444.777-35\nCarla - CNPJ: 11.222.333/0001-81")
+
+
+def test_context_info_reports_what_was_cut():
+    from app.ingest.chunker import chunk_page
+    from app.search.memory import MemoryStore
+
+    pages = [{"doc_id": "d", "page": i, "label": f"pg. {i}", "text": ("texto neutro " * 50)} for i in range(1, 101)]
+    st = MemoryStore()
+    for p in pages:
+        st.index("d", chunk_page(p["page"], p["text"]))
+    _, inteiro = ex.select_context_info(pages, 10_000_000, st, ["d"])
+    assert inteiro["cortado"] is False and inteiro["paginas_enviadas"] == 100 and inteiro["paginas_omitidas"] == 0
+    txt, corte = ex.select_context_info(pages, 20_000, st, ["d"])
+    assert corte["cortado"] is True and corte["paginas_total"] == 100 and corte["paginas_enviadas"] < 100
+    assert corte["paginas_omitidas"] == 100 - corte["paginas_enviadas"] and corte["caracteres_enviados"] <= 20_000
+    assert ex.select_context(pages, 20_000, st, ["d"]) == txt  # a versão antiga continua igual
+
+
+def test_providers_expose_token_usage_per_call():
+    from app.llm import AnthropicProvider, GeminiProvider
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            return SimpleNamespace(text='{"observacoes": "ok"}', usage_metadata=SimpleNamespace(
+                prompt_token_count=25000, candidates_token_count=800, thoughts_token_count=300))
+
+    g = GeminiProvider("k", "m", SimpleNamespace(models=Models()))
+    assert g.last_usage is None
+    g.extract("s", "u", ex.tool_schema(SHEETS["outras_acoes"]))
+    assert g.last_usage == {"entrada": 25000, "saida": 800, "raciocinio": 300}
+
+    a = AnthropicProvider("k", "m", SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input={"observacoes": "x"})], usage=SimpleNamespace(input_tokens=111, output_tokens=22)))))
+    a.extract("s", "u", {"type": "object", "properties": {}})
+    assert a.last_usage == {"entrada": 111, "saida": 22, "raciocinio": None}
+
+    import threading
+    visto = []
+    t = threading.Thread(target=lambda: visto.append(g.last_usage))  # outra thread não enxerga o uso desta
+    t.start(); t.join()
+    assert visto == [None]
+
+
+def test_pdf_pages_carry_reading_time_and_ocr_time(tmp_path, monkeypatch):
+    import time as _t
+
+    from app.ingest import pdf
+
+    monkeypatch.setattr(pdf, "ocr_available", lambda: True)
+    monkeypatch.setattr(pdf, "_ocr_page", lambda page, s: (_t.sleep(0.05), "DARF pago R$ 77,00 CNPJ 11.222.333/0001-81")[1])
+    p = tmp_path / "a.pdf"
+    make_pdf(p)  # 3 páginas de texto + 1 imagem (OCR)
+    pages = list(pdf.iter_pages(str(p), Settings()))
+    assert [x.method for x in pages] == ["text", "text", "text", "ocr"]
+    assert all(x.seconds >= 0 for x in pages) and pages[3].seconds >= 0.05 > pages[0].seconds
+
+
+def test_measurements_are_recorded_for_pdf_and_extraction_and_exposed_in_sheet(env):
+    c, llm, tmp = env
+    case = c.post("/api/cases", json={"nome": "Medições"}).json()
+    pdf = tmp / f"{NUM}_V001_001-1-4.pdf"
+    make_pdf(pdf, image_page=False)
+    with pdf.open("rb") as f:
+        up = c.post("/api/documents", data={"case_id": case["id"], "tipo": "execucao_fiscal"}, files={"file": (pdf.name, f, "application/pdf")}).json()
+    d = wait(c, up["id"])
+    m = d["result"]["medidas"]
+    assert m["tokens"] == {"entrada": 1000, "saida": 50, "raciocinio": None}
+    assert m["contexto"]["cortado"] is False and m["contexto"]["paginas_total"] == 3 and m["contexto"]["paginas_enviadas"] == 3
+    assert m["extracao_s"] >= 0
+    t = d["metadata"]["tempos"]
+    assert t["paginas"] == 3 and t["total_s"] >= 0 and t["ocr_paginas"] == 0
+    linha = c.get(f"/api/cases/{case['id']}/sheet").json()["linhas"][0]
+    assert linha["medidas"]["tokens"]["entrada"] == 1000 and linha["docs"][0]["tempos"]["paginas"] == 3

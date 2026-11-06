@@ -5,6 +5,7 @@ Contrato: `extract(system, user, schema)` devolve um dict que obedece ao JSON Sc
 import json
 import math
 import re
+import threading
 import time
 from typing import Optional, Protocol
 
@@ -39,7 +40,21 @@ def _is_transient(e: Exception) -> bool:
     return any(k in txt for k in ("503", "502", "504", "unavailable", "high demand", "overloaded"))
 
 
-class GeminiProvider:
+class _UsageMixin:
+    """Tokens da última chamada bem-sucedida, por thread (a API e os workers compartilham o provedor)."""
+    _tls = None
+
+    def _set_usage(self, entrada, saida, raciocinio=None) -> None:
+        if self._tls is None:
+            self._tls = threading.local()
+        self._tls.u = {"entrada": entrada, "saida": saida, "raciocinio": raciocinio}
+
+    @property
+    def last_usage(self) -> Optional[dict]:
+        return getattr(self._tls, "u", None) if self._tls is not None else None
+
+
+class GeminiProvider(_UsageMixin):
     name = "gemini"
 
     def __init__(self, api_key: str, model: str, client=None, fallback_model: str = "") -> None:
@@ -77,6 +92,12 @@ class GeminiProvider:
         assert last is not None
         raise last
 
+    def _note_usage(self, resp) -> None:
+        um = getattr(resp, "usage_metadata", None)
+        if um is not None:
+            self._set_usage(getattr(um, "prompt_token_count", None), getattr(um, "candidates_token_count", None),
+                            getattr(um, "thoughts_token_count", None))
+
     def _config(self, system: str, **kw):
         from google.genai import types
 
@@ -95,15 +116,17 @@ class GeminiProvider:
             resp = self._call(
                 model=self.model, contents=user,
                 config=self._config(system + hint, response_mime_type="application/json", max_output_tokens=16000))
+        self._note_usage(resp)
         return _loads(resp.text)
 
     def generate(self, system: str, user: str, max_tokens: int = 1000) -> str:
         resp = self._call(
             patient=False, model=self.model, contents=user, config=self._config(system, max_output_tokens=max_tokens))
+        self._note_usage(resp)
         return resp.text or ""
 
 
-class AnthropicProvider:
+class AnthropicProvider(_UsageMixin):
     name = "anthropic"
 
     def __init__(self, api_key: str, model: str, client=None) -> None:
@@ -119,6 +142,9 @@ class AnthropicProvider:
             tools=[{"name": "registrar_extracao", "description": "Registra os dados extraídos do processo.", "input_schema": schema}],
             tool_choice={"type": "tool", "name": "registrar_extracao"},
             messages=[{"role": "user", "content": user}])
+        u = getattr(msg, "usage", None)
+        if u is not None:
+            self._set_usage(getattr(u, "input_tokens", None), getattr(u, "output_tokens", None))
         for b in msg.content:
             if getattr(b, "type", "") == "tool_use":
                 return dict(b.input)
@@ -127,6 +153,9 @@ class AnthropicProvider:
     def generate(self, system: str, user: str, max_tokens: int = 1000) -> str:
         msg = self.client.messages.create(model=self.model, max_tokens=max_tokens, system=system,
                                           messages=[{"role": "user", "content": user}])
+        u = getattr(msg, "usage", None)
+        if u is not None:
+            self._set_usage(getattr(u, "input_tokens", None), getattr(u, "output_tokens", None))
         return "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
 
 

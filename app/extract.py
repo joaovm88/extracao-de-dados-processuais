@@ -46,10 +46,10 @@ def tool_schema(sheet: Sheet) -> dict:
     return {"type": "object", "properties": props, "required": ["observacoes"]}
 
 
-def select_context(pages: list[dict], budget: int, store=None, doc_ids: Optional[list[str]] = None) -> str:
+def select_context_info(pages: list[dict], budget: int, store=None, doc_ids: Optional[list[str]] = None) -> tuple[str, dict]:
     """pages: [{'doc_id', 'page', 'label', 'text'}] na ordem dos autos (todas as partes juntas).
     Processos pequenos vão inteiros; grandes usam recuperação híbrida por campo + as páginas finais
-    (estado atual), sempre em ordem cronológica."""
+    (estado atual), sempre em ordem cronológica. Devolve (texto, medidas do corte)."""
     total = sum(len(p["text"]) for p in pages)
     chosen = pages
     if total > budget and store is not None:
@@ -73,7 +73,13 @@ def select_context(pages: list[dict], budget: int, store=None, doc_ids: Optional
             break
         out.append(f"=== [{p['label']}] ===\n{p['text']}")
         used += len(p["text"])
-    return "\n\n".join(out)
+    info = {"paginas_total": len(pages), "paginas_enviadas": len(out), "paginas_omitidas": len(pages) - len(out),
+            "caracteres_total": total, "caracteres_enviados": used, "orcamento": budget, "cortado": len(out) < len(pages)}
+    return "\n\n".join(out), info
+
+
+def select_context(pages: list[dict], budget: int, store=None, doc_ids: Optional[list[str]] = None) -> str:
+    return select_context_info(pages, budget, store, doc_ids)[0]
 
 
 def citation_rule(sistema) -> str:

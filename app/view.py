@@ -63,8 +63,9 @@ def build(processes: list[dict], docs: list[dict], template_bytes: Optional[byte
             "numero": p["numero"], "aba": aba, "estado": estado(p), "reviewed": bool(p.get("reviewed")), "error": p.get("error"),
             "valores": valores, "citacoes": res.get("citacoes") or {}, "citacoes_invalidas": res.get("citacoes_invalidas") or [],
             "sistema": res.get("sistema"), "modelo": res.get("prompt"), "paginas": res.get("paginas"), "modo": res.get("modo"),
-            "docs": [{k: d.get(k) for k in ("id", "filename", "status", "pages_done", "pages_total", "pages_ocr", "error")}
-                     for d in by_num.get(p["numero"], [])]})
+            "medidas": res.get("medidas"),
+            "docs": [{**{k: d.get(k) for k in ("id", "filename", "status", "pages_done", "pages_total", "pages_ocr", "error")},
+                      "tempos": (d.get("metadata") or {}).get("tempos")} for d in by_num.get(p["numero"], [])]})
         bens += [{"numero": p["numero"], **b} for b in res.get("bens", [])]
         fraudes += [{"numero": p["numero"], **f} for f in res.get("fraudes", [])]
     for a in abas:

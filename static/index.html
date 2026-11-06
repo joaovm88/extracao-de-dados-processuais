@@ -46,6 +46,7 @@
         <div class="tabs" id="tabs" role="tablist" aria-label="Abas da planilha"></div>
         <span class="spacer"></span>
         <span class="pill" id="pill-busy" hidden></span>
+        <button class="pill btn-pill" id="btn-med" title="Tokens, páginas enviadas à IA e tempos">📊 Medições</button>
         <button class="pill btn-pill" id="btn-docs">📎 PDFs <span id="docs-n"></span></button>
       </div>
       <div class="filters" id="filters">
@@ -116,6 +117,12 @@
 <dialog id="dlg-docs" class="wide"><form method="dialog" class="dlg">
   <header><h2>PDFs enviados</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
   <div class="dlg-body"><div class="scroll"><table class="plain" id="docs"><thead><tr><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div></div>
+  <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
+</form></dialog>
+
+<dialog id="dlg-med" class="wide"><form method="dialog" class="dlg">
+  <header><h2>Medições do caso</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body"><div id="med-sum"></div><div class="scroll"><table class="plain" id="med-tab"><thead><tr><th>Processo</th><th>Páginas</th><th>Enviadas à IA</th><th>Tokens (entrada / saída)</th><th>Tempo da IA</th><th>Leitura dos PDFs</th></tr></thead><tbody></tbody></table></div></div>
   <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
 </form></dialog>
 

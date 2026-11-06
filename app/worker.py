@@ -5,6 +5,7 @@ todos os PDFs do caso terminam, cada processo com material novo é extraído uma
 import json
 import logging
 import threading
+import time
 from typing import Optional
 
 from . import extract as ex
@@ -68,6 +69,7 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
     if not doc:
         return
     try:
+        t_ini = time.perf_counter()
         total = page_count(doc["path"])
         db.update(doc_id, status="processing", pages_total=total, pages_done=0, pages_ocr=0, error=None)
         store.delete(doc_id)  # reprocessamento idempotente
@@ -79,7 +81,7 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         pages: list[dict] = []
         methods: dict[int, str] = {}
         batch: list = []
-        ocr_pages = 0
+        ocr_pages, ocr_s, texto_s = 0, 0.0, 0.0
         for pr in iter_pages(doc["path"], settings):
             absp = start + pr.number - 1  # página no volume/processo original
             own = citation.page_refs(pr.text)
@@ -89,6 +91,10 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
             pages.append({"page": absp, "text": pr.text, "refs": refs})
             methods[absp] = pr.method
             ocr_pages += pr.method == "ocr"
+            if pr.method == "ocr":
+                ocr_s += pr.seconds
+            else:
+                texto_s += pr.seconds
             batch.extend(chunk_page(absp, pr.text))
             if len(batch) >= 200:  # indexa em lotes: processos com milhares de páginas
                 store.index(doc_id, batch)
@@ -105,6 +111,8 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
         meta["paginas_sem_texto"] = sorted(n for n, m in methods.items() if m in ("ocr_unavailable", "empty"))
         meta["paginas_texto_degradado"] = sorted(n for n, m in methods.items() if m == "text_degraded")
         meta["rotulos"] = {str(p["page"]): p["label"] for p in pages}
+        meta["tempos"] = {"total_s": round(time.perf_counter() - t_ini, 1), "ocr_s": round(ocr_s, 1), "ocr_paginas": ocr_pages,
+                          "texto_s": round(texto_s, 1), "paginas": total}
         meta["metodo_por_pagina"] = {"texto": sum(m == "text" for m in methods.values()), "ocr": ocr_pages}
         numero = _resolve_numero(db, doc, meta)
         classe = doc.get("classe") or next(
@@ -154,8 +162,11 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                   "documentos": [d["filename"] for d in docs], "paginas": len(pages)}
         llm = llm_client or get_llm(settings)
         if llm is not None:
-            context = ex.select_context(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
+            context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
+            t_ia = time.perf_counter()
             out = ex.extract_with_llm(sheet, prompt, context, llm, sistema)
+            result["medidas"] = {"contexto": info, "tokens": getattr(llm, "last_usage", None),
+                                 "extracao_s": round(time.perf_counter() - t_ia, 1)}
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
                           revisar=out["_revisar"], modo="llm", provedor=llm.name)

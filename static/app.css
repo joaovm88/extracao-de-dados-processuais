@@ -110,3 +110,4 @@ mark{background:var(--yellow);color:#1b2430;border-radius:3px;padding:0 1px}
 .clamp.lista{display:block;white-space:normal;-webkit-line-clamp:unset;overflow:visible}.clamp.lista:empty::before{content:"Clique para escrever…";color:var(--muted)}
 .lista .li{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}.lista .mais{color:var(--blue);font-size:12px;font-weight:600}
 #grid td:has(.lista){min-width:400px}
+.med{margin:0 0 10px 18px;padding:0}.med li{margin-bottom:5px}.alert.ok{background:var(--ok-bg);color:var(--ok)}code{background:var(--bg);padding:1px 5px;border-radius:5px;font-size:12px}
