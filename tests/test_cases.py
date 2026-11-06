@@ -610,3 +610,36 @@ def test_gemini_retries_503_overload_then_falls_back_to_reserve_model(monkeypatc
     with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
         GeminiProvider("k", "principal", SimpleNamespace(models=m4), fallback_model="reserva").extract("s", "u", schema)
     assert esperas == []
+
+
+def test_chat_is_impatient_but_extraction_is_patient(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    esperas = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: esperas.append(s))
+
+    class Models:
+        def __init__(self, msg):
+            self.msg, self.modelos = msg, []
+
+        def generate_content(self, model, contents, config):
+            self.modelos.append(model)
+            raise RuntimeError(self.msg)
+
+    m = Models("503 UNAVAILABLE high demand")
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "p", SimpleNamespace(models=m)).generate("s", "u")
+    assert m.modelos == ["p", "p"] and esperas == [5]  # chat: 2 tentativas, 5 s (não 85 s)
+
+    esperas.clear()
+    m2 = Models("503 UNAVAILABLE high demand")
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "p", SimpleNamespace(models=m2), fallback_model="r").generate("s", "u")
+    assert m2.modelos == ["p", "p", "r", "r"]  # depois tenta o modelo reserva
+
+    m3 = Models("429 RESOURCE_EXHAUSTED: Please retry in 32s")  # prazo longo: no chat não espera
+    esperas.clear()
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "p", SimpleNamespace(models=m3)).generate("s", "u")
+    assert len(m3.modelos) == 1 and esperas == []

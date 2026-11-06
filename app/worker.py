@@ -39,7 +39,7 @@ def explain_llm_error(e: Exception) -> str:
     elif "json" in low:
         dica = "A IA devolveu uma resposta fora do formato esperado. Tente novamente."
     else:
-        dica = "Falha na extração por IA."
+        dica = "Falha na chamada à IA."
     return f"{dica} Detalhe técnico: {raw[:400]}"
 
 

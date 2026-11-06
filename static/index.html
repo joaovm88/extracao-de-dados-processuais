@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Análise de Processos Judiciais</title>
+<script>try{var t=localStorage.getItem("tema")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme="light"}</script>
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
@@ -18,6 +19,7 @@
     </div>
     <span class="spacer"></span>
     <span class="chip" id="llm" title="Provedor de IA">IA…</span>
+    <button class="icon-btn" id="theme" title="Alternar tema claro/escuro" aria-label="Alternar tema claro/escuro">🌙</button>
     <button class="btn ghost" id="btn-tpl" disabled><span aria-hidden="true">▤</span> Planilha-modelo <i class="dot" id="tpl-dot" hidden></i></button>
     <button class="btn" id="btn-upload" disabled><span aria-hidden="true">⬆</span> Upload de Processo (PDF)</button>
     <a class="btn primary" id="export" href="#" aria-disabled="true"><span aria-hidden="true">⬇</span> Exportar Planilha Corporativa (.xlsx)</a>
@@ -45,6 +47,12 @@
         <span class="spacer"></span>
         <span class="pill" id="pill-busy" hidden></span>
         <button class="pill btn-pill" id="btn-docs">📎 PDFs <span id="docs-n"></span></button>
+      </div>
+      <div class="filters" id="filters">
+        <div class="search"><span aria-hidden="true">🔎</span><label for="f-q" class="sr">Filtrar linhas</label><input id="f-q" type="search" placeholder="Filtrar por nº, parte, juízo, valor…  ( / )" autocomplete="off"></div>
+        <label for="f-st" class="sr">Situação</label>
+        <select id="f-st"><option value="">Todas as situações</option><option value="revisar">A revisar</option><option value="revisado">Revisados</option><option value="erro">Com erro</option><option value="andamento">Em andamento</option><option value="sem_pdf">Sem PDF</option></select>
+        <span class="muted" id="f-count"></span><button class="btn sm" id="f-clear" hidden>Limpar filtro</button>
       </div>
       <div class="banner" id="banner" hidden></div>
       <div class="grid-wrap" id="grid-wrap"><table id="grid"></table><div class="grid-empty" id="grid-empty" hidden></div></div>
@@ -112,7 +120,7 @@
 </form></dialog>
 
 <dialog id="dlg-notes" class="wide"><form method="dialog" class="dlg">
-  <header><div><h2>Observações relevantes</h2><small class="muted" id="notes-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <header><div><h2 id="notes-title">Observações relevantes</h2><small class="muted" id="notes-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
   <div class="dlg-body"><label for="notes-text" class="sr">Observações</label><textarea id="notes-text"></textarea><p class="cit" id="notes-cit"></p></div>
   <footer><button class="btn" value="x">Cancelar</button><button class="btn primary" id="notes-save" type="button">Salvar</button></footer>
 </form></dialog>

@@ -14,10 +14,13 @@ function toast(msg, kind = '') { const t = document.createElement('div'); t.clas
 /* ---------- estado ---------- */
 let caseId = null, data = null, dataKey = '', aba = 'execucoes_fiscais', sel = null, timer = null, schema = {}, tplState = {ativo: false}, picked = [], dragging = false;
 let panelOpen = innerWidth > 900 ? store.get('painel') !== '0' : false;
+let filtro = {q: '', st: ''};
+const LONG = ['observacoes', 'corresponsaveis'];  // colunas de texto longo: abrem numa janela para ler/editar tudo
 const chats = {};  // histórico do assistente por processo (só nesta sessão do navegador)
 const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], aguardando: ['warn', 'aguardando PDFs'], desatualizado: ['warn', 'novas partes'], erro: ['err', 'erro'], sem_pdf: ['', 'sem PDF']};
 const DST = {queued: ['warn', 'na fila'], processing: ['warn', 'processando'], done: ['ok', 'lido'], error: ['err', 'erro']};
 const MODELO = {execucoes_fiscais: 'Execução fiscal', outras_acoes: 'Outras ações', recursos: 'Recursos'};
+const norm = t => String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 const editable = l => ['pronto', 'desatualizado'].includes(l.estado);
 const row = n => data?.linhas.find(l => l.numero === n);
 
@@ -79,18 +82,38 @@ function renderToolbar() {
   const b = $('banner-docs'); if (b) b.onclick = e => { e.preventDefault(); openDocs(); };
 }
 
+/* ---------- filtro das linhas ---------- */
+function passa(l) {
+  if (filtro.st) {
+    const ed = editable(l), ok = {revisar: ed && !l.reviewed, revisado: ed && l.reviewed, erro: l.estado === 'erro',
+      andamento: ['extraindo', 'aguardando'].includes(l.estado) || l.docs.some(d => ['queued', 'processing'].includes(d.status)), sem_pdf: l.estado === 'sem_pdf'}[filtro.st];
+    if (!ok) return false;
+  }
+  const termos = norm(filtro.q).split(/\s+/).filter(Boolean); if (!termos.length) return true;
+  const palha = norm(`${l.numero} ${Object.values(l.valores).join(' ')}`); return termos.every(t => palha.includes(t));
+}
+const passaItem = i => { const termos = norm(filtro.q).split(/\s+/).filter(Boolean); const p = norm(Object.values(i).join(' ')); return termos.every(t => p.includes(t)); };
+function updateFilterUI(shown, total) {
+  const ativo = !!(filtro.q.trim() || filtro.st); $('f-clear').hidden = !ativo; $('f-count').textContent = ativo ? `Mostrando ${shown} de ${total}` : `${total} linha(s)`;
+}
+$('f-q').oninput = e => { filtro.q = e.target.value; if (data) renderGrid(); };
+$('f-st').onchange = e => { filtro.st = e.target.value; if (data) renderGrid(); };
+$('f-clear').onclick = () => { filtro = {q: '', st: ''}; $('f-q').value = ''; $('f-st').value = ''; renderGrid(); $('f-q').focus(); };
+document.addEventListener('keydown', e => { if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.querySelector('dialog[open]') && caseId) { e.preventDefault(); $('f-q').focus(); } });
+
 /* ---------- planilha viva ---------- */
 function renderGrid() {
   const a = data.abas.find(x => x.key === aba), table = $('grid');
-  const linhas = data.linhas.filter(l => l.aba === aba);
+  const todas = data.linhas.filter(l => l.aba === aba), linhas = todas.filter(passa);
   $('grid-empty').hidden = true;
   if (aba === 'bens' || aba === 'fraude') {
-    const items = aba === 'bens' ? data.bens : data.fraudes;
+    const todos = aba === 'bens' ? data.bens : data.fraudes, items = todos.filter(passaItem); updateFilterUI(items.length, todos.length);
     table.innerHTML = `<thead><tr><th style="min-width:230px;max-width:230px">Processo</th>${a.colunas.map(c => `<th>${esc(c.titulo)}</th>`).join('')}</tr></thead><tbody>${items.map(i =>
       `<tr><td class="first"><span class="num">${esc(i.numero)}</span></td>${a.colunas.map(c => `<td class="c ro">${esc(i[c.key] ?? '')}</td>`).join('')}</tr>`).join('')}</tbody>`;
-    if (!items.length) emptyGrid(aba === 'bens' ? 'Nenhum bem extraído ainda' : 'Nenhuma alegação de fraude', 'Os itens aparecem aqui quando a IA os encontra nos processos. Esta aba é somente leitura.');
+    if (!items.length) emptyGrid(todos.length ? 'Nenhum item corresponde ao filtro' : aba === 'bens' ? 'Nenhum bem extraído ainda' : 'Nenhuma alegação de fraude', todos.length ? 'Ajuste ou limpe o filtro acima.' : 'Os itens aparecem aqui quando a IA os encontra nos processos. Esta aba é somente leitura.');
     return;
   }
+  updateFilterUI(linhas.length, todas.length);
   const cols = a.colunas.filter(c => c.key !== 'numero');
   table.innerHTML = `<thead><tr><th>Processo</th>${cols.map(c => `<th title="${esc(c.titulo)}">${esc(c.titulo)}</th>`).join('')}</tr></thead><tbody>${linhas.map(l => {
     const [cls, txt] = ESTADO[l.estado], ed = editable(l), waiting = ['extraindo', 'aguardando'].includes(l.estado);
@@ -100,14 +123,14 @@ function renderGrid() {
       <div class="sub"><span class="tag ${cls}">${txt}</span>${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> revisado</label>` : ''}</div></td>
       ${cols.map(c => cell(l, c, ed, waiting)).join('')}</tr>`;
   }).join('')}</tbody>`;
-  if (!linhas.length) emptyGrid('Nenhum processo nesta aba', 'Importe a planilha-modelo e envie PDFs (botão "Upload de Processo" no topo, ou arraste os arquivos para cá).');
+  if (!linhas.length) emptyGrid(todas.length ? 'Nenhum processo corresponde ao filtro' : 'Nenhum processo nesta aba', todas.length ? 'Ajuste ou limpe o filtro acima.' : 'Importe a planilha-modelo e envie PDFs (botão "Upload de Processo" no topo, ou arraste os arquivos para cá).');
 }
 function emptyGrid(t, p) { const g = $('grid-empty'); g.hidden = false; g.innerHTML = `<b>${esc(t)}</b>${esc(p)}`; }
 function cell(l, c, ed, waiting) {
   const v = l.valores[c.key] ?? '', tip = l.citacoes[c.key] ? ` title="Origem: ${esc(l.citacoes[c.key])}"` : '';
   if (c.fonte !== 'ai') return `<td class="c ro"${tip}>${esc(v)}</td>`;  // capa (Mcfly) e campos do sistema: somente leitura
   if (!ed) return `<td>${waiting ? '<div class="shim"></div>' : '<div class="wait">—</div>'}</td>`;
-  if (c.key === 'observacoes') return `<td${tip}><div class="clamp" data-obs tabindex="0" role="button">${esc(v)}</div></td>`;
+  if (LONG.includes(c.key)) return `<td${tip}><div class="clamp" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar tudo">${esc(v)}</div></td>`;
   if (c.opcoes) return `<td${tip}><select data-k="${c.key}"><option value=""></option>${c.opcoes.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></td>`;
   return `<td${tip}><input type="text" data-k="${c.key}" value="${esc(v)}"></td>`;
 }
@@ -121,7 +144,7 @@ async function save(numero, key, value, td) {
     await api(`/api/cases/${caseId}/processes/${enc(numero)}/review`, json('PUT', body));
     l.valores[key] = val; dataKey = JSON.stringify(data); toast('Salvo', 'ok');
     if (td) { td.classList.replace('saving', 'saved'); setTimeout(() => td.classList.remove('saved'), 900); }
-    if (key === 'observacoes') renderGrid();
+    if (LONG.includes(key)) renderGrid();
   } catch (e) { toast(e.message, 'err'); td && td.classList.remove('saving'); renderGrid(); }
 }
 $('grid').addEventListener('change', e => {
@@ -132,11 +155,11 @@ $('grid').addEventListener('change', e => {
 $('grid').addEventListener('keydown', e => {
   if (e.key === 'Enter' && e.target.matches('input[data-k]')) e.target.blur();
   if (e.key === 'Escape' && e.target.matches('input[data-k]')) { e.target.value = row(e.target.closest('tr').dataset.n)?.valores[e.target.dataset.k] ?? ''; e.target.blur(); }
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-obs]')) { e.preventDefault(); openNotes(e.target.closest('tr').dataset.n); }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[data-long]')) { e.preventDefault(); openLong(e.target.closest('tr').dataset.n, e.target.dataset.long); }
 });
 $('grid').addEventListener('click', e => {
   const tr = e.target.closest('tbody tr'); if (!tr || !tr.dataset.n) return;
-  if (e.target.closest('[data-obs]')) openNotes(tr.dataset.n);
+  const lg = e.target.closest('[data-long]'); if (lg) openLong(tr.dataset.n, lg.dataset.long);
   if (e.target.closest('input[type=checkbox],label')) return;
   select(tr.dataset.n);
 });
@@ -144,14 +167,14 @@ async function setReviewed(numero, v) {
   try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/review`, json('PUT', {reviewed: v})); row(numero).reviewed = v; dataKey = JSON.stringify(data); toast(v ? 'Marcado como revisado' : 'Marcado como a revisar', 'ok'); renderGrid(); renderAssistInfo(); }
   catch (e) { toast(e.message, 'err'); renderGrid(); }
 }
-/* observações (texto longo) */
-let notesFor = null;
-function openNotes(numero) {
-  const l = row(numero); if (!l || !editable(l)) return; notesFor = numero;
-  $('notes-sub').textContent = numero; $('notes-text').value = l.valores.observacoes ?? '';
-  $('notes-cit').textContent = l.citacoes.observacoes ? `Origem: ${l.citacoes.observacoes}` : ''; $('dlg-notes').showModal(); $('notes-text').focus();
+/* texto longo (observações, corresponsáveis): janela para ler e editar tudo */
+let longFor = null;
+function openLong(numero, key) {
+  const l = row(numero); if (!l || !editable(l)) return; const col = data.abas.flatMap(a => a.colunas).find(c => c.key === key);
+  longFor = {numero, key}; $('notes-title').textContent = col ? col.titulo : 'Texto'; $('notes-sub').textContent = numero; $('notes-text').value = l.valores[key] ?? '';
+  $('notes-cit').textContent = l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''; $('dlg-notes').showModal(); $('notes-text').focus();
 }
-$('notes-save').onclick = async () => { const n = notesFor; await save(n, 'observacoes', $('notes-text').value, null); $('dlg-notes').close(); };
+$('notes-save').onclick = async () => { const f = longFor; await save(f.numero, f.key, $('notes-text').value, null); $('dlg-notes').close(); };
 
 /* ---------- painel do assistente (retrátil) ---------- */
 function applyPanel() {
@@ -207,15 +230,16 @@ function renderChat() {
   document.querySelectorAll('#suggest button').forEach(b => b.onclick = () => ask(b.textContent));
   $('log').innerHTML = h.length ? h.map((m, i) => m.role === 'u' ? `<div class="bub u">${esc(m.text)}</div>`
     : `<div class="bub a ${m.think ? 'think' : ''} ${m.err ? 'er' : ''}">${esc(m.text)}${m.sources?.length ? `<div class="src">${[...new Set(m.sources)].map(s => `<span>${esc(s)}</span>`).join('')}</div>` : ''}
-       ${m.think || m.err ? '' : `<button class="btn sm" data-add="${i}">＋ Adicionar às observações</button>`}</div>`).join('')
+       ${m.think ? '' : m.err ? `<button class="btn sm" data-again-q="${i}">↻ Tentar de novo</button>` : `<button class="btn sm" data-add="${i}">＋ Adicionar às observações</button>`}</div>`).join('')
     : '<p class="hint">As respostas citam a origem (Evento/ID e página). O histórico vale só nesta sessão do navegador.</p>';
   $('log').scrollTop = 1e9; document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => addToNotes(+b.dataset.add));
+  document.querySelectorAll('[data-again-q]').forEach(b => b.onclick = () => { const i = +b.dataset.againQ, q = chats[sel][i].q; chats[sel].splice(i - 1, 2); ask(q); });
 }
 async function ask(q) {
   q = (q || '').trim(); const l = sel && row(sel); if (!q || !l || $('q').disabled) return; $('q').value = '';
   const num = sel, h = chats[num] = chats[num] || []; h.push({role: 'u', text: q}); h.push({role: 'a', text: 'Consultando o processo…', think: true}); renderChat();
   try { const j = await api('/api/chat', json('POST', {question: q, case_id: caseId, numero: num})); h[h.length - 1] = {role: 'a', text: j.answer, sources: j.sources.map(s => s.rotulo), q}; }
-  catch (e) { h[h.length - 1] = {role: 'a', text: e.message, err: true}; }
+  catch (e) { h[h.length - 1] = {role: 'a', text: e.message, err: true, q}; }
   if (sel === num) renderChat();
 }
 async function addToNotes(i) {
@@ -289,6 +313,11 @@ function renderDocs() {
   $('docs').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { await delDoc(b.dataset.del); renderDocs(); });
   $('docs').querySelectorAll('[data-retry]').forEach(b => b.onclick = async () => { await retryDoc(b.dataset.retry); renderDocs(); });
 }
+
+/* ---------- tema claro/escuro ---------- */
+function applyTheme(t) { document.documentElement.dataset.theme = t; store.set('tema', t); $('theme').textContent = t === 'dark' ? '☀' : '🌙'; $('theme').title = t === 'dark' ? 'Mudar para tema claro' : 'Mudar para tema escuro'; }
+$('theme').onclick = () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+applyTheme(document.documentElement.dataset.theme || 'light');
 
 /* ---------- inicialização ---------- */
 api('/api/tipos').then(t => { schema = t; for (const [k, v] of Object.entries(t.tipos)) $('tipo').add(new Option(v, k)); for (const [k, v] of Object.entries(t.sistemas)) $('sistema').add(new Option(v, k)); });

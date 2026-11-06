@@ -1,7 +1,8 @@
 :root{--blue:#1351b4;--blue-d:#0c326f;--bg:#f3f5f9;--card:#fff;--ink:#1b2430;--muted:#5d6b7c;--line:#e3e8ef;--hover:#eef3fc;--yellow:#ffcd07;
   --ok:#168821;--ok-bg:#e3f5e1;--warn:#8a5a00;--warn-bg:#fff3cd;--err:#c42d12;--err-bg:#fde8e4;--sel:#e3ecfb;--r:12px;--sh:0 1px 2px #1b24300d,0 6px 20px #1b243014;--top:56px}
-@media (prefers-color-scheme:dark){:root{--blue:#6ea2ff;--blue-d:#9bbcff;--bg:#0f1520;--card:#161f2e;--ink:#e6ebf2;--muted:#9aa8ba;--line:#2b3747;--hover:#1c2940;--sel:#1f2f4d;
-  --ok:#59d07a;--ok-bg:#16301f;--warn:#f1c453;--warn-bg:#3a2f12;--err:#ff8a73;--err-bg:#3a1c17;--sh:0 1px 2px #0007}}
+:root{color-scheme:light}
+:root[data-theme=dark]{color-scheme:dark;--blue:#6ea2ff;--blue-d:#9bbcff;--bg:#0f1520;--card:#161f2e;--ink:#e6ebf2;--muted:#9aa8ba;--line:#2b3747;--hover:#1c2940;--sel:#1f2f4d;
+  --ok:#59d07a;--ok-bg:#16301f;--warn:#f1c453;--warn-bg:#3a2f12;--err:#ff8a73;--err-bg:#3a1c17;--sh:0 1px 2px #0007}
 *{box-sizing:border-box}html,body{height:100%}
 body{margin:0;font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg);overflow:hidden}
 .hidden,[hidden]{display:none!important}.sr{position:absolute;left:-9999px}.spacer{flex:1}.muted{color:var(--muted)}a{color:var(--blue)}
@@ -99,3 +100,10 @@ table.plain{font-size:13px}table.plain th{background:var(--bg);color:var(--muted
 @media (max-width:900px){body{overflow:auto}.app{height:auto;min-height:100vh}.top{flex-wrap:wrap;height:auto;padding:8px 12px}.work{display:block;height:calc(100vh - 110px)}
   .sheet-area{height:100%;padding:8px 0 0 8px}.assist{position:fixed;inset:0;z-index:20;transform:translateX(100%);transition:.2s}.work:not(.collapsed) .assist{transform:none}.work.collapsed .assist{visibility:visible}
   .work:not(.collapsed) .sheet-area{display:flex}.edge-btn{top:auto;bottom:16px;right:12px;transform:none;border-radius:999px}.two{grid-template-columns:1fr}.spacer{display:none}}
+
+/* filtros */
+.filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:0 12px 8px 0;flex:none}
+.search{display:flex;align-items:center;gap:6px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:0 10px;flex:1;min-width:200px;max-width:420px}
+.search input{border:0;background:none;padding:7px 0;outline:none;width:100%;color:var(--ink);font:inherit}.search:focus-within{border-color:var(--blue);box-shadow:0 0 0 2px var(--sel)}
+.filters select{width:auto;padding:7px 10px;border-radius:9px;border-color:var(--line)}
+mark{background:var(--yellow);color:#1b2430;border-radius:3px;padding:0 1px}

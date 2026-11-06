@@ -49,16 +49,18 @@ class GeminiProvider:
             client = genai.Client(api_key=api_key)
         self.client, self.model, self.fallback_model = client, model, fallback_model
 
-    def _call(self, **kw):
-        """generate_content com novas tentativas: limite por minuto (espera o prazo do Google) e sobrecarga
-        temporária 503 (espera 10/25/50 s). Esgotadas, tenta o modelo reserva, se houver. Outros erros sobem na hora."""
+    def _call(self, patient: bool = True, **kw):
+        """generate_content com novas tentativas. Extração (patient): até 4 tentativas, esperando 10/25/50 s em sobrecarga 503
+        e o prazo do Google em limite por minuto. Chat (impaciente): 2 tentativas com 5 s, para o analista não ficar esperando.
+        Esgotadas, tenta o modelo reserva, se houver. Erros que esperar não resolve sobem na hora."""
         models = [kw["model"]]
         if self.fallback_model and self.fallback_model != kw["model"]:
             models.append(self.fallback_model)
+        tentativas, backoff = (4, TRANSIENT_BACKOFF) if patient else (2, (5,))
         last: Optional[Exception] = None
         for model in models:
             kw["model"] = model
-            for attempt in range(4):
+            for attempt in range(tentativas):
                 try:
                     return self.client.models.generate_content(**kw)
                 except Exception as e:  # noqa: BLE001
@@ -67,9 +69,11 @@ class GeminiProvider:
                     transient = _is_transient(e)
                     if delay is None and not transient:
                         raise  # erro que esperar não resolve (chave, modelo, cota diária, pedido inválido)
-                    if attempt == 3:
+                    if not patient and delay is not None and delay > 20:
+                        raise  # no chat não vale esperar tanto: o analista tenta de novo
+                    if attempt == tentativas - 1:
                         break
-                    time.sleep(delay if delay is not None else TRANSIENT_BACKOFF[attempt])
+                    time.sleep(delay if delay is not None else backoff[attempt])
         assert last is not None
         raise last
 
@@ -95,7 +99,7 @@ class GeminiProvider:
 
     def generate(self, system: str, user: str, max_tokens: int = 1000) -> str:
         resp = self._call(
-            model=self.model, contents=user, config=self._config(system, max_output_tokens=max_tokens))
+            patient=False, model=self.model, contents=user, config=self._config(system, max_output_tokens=max_tokens))
         return resp.text or ""
 
 

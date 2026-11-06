@@ -267,3 +267,27 @@ def test_dockerfile_copies_every_runtime_directory():
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
     for pasta in ("app", "static", "prompts"):
         assert f"COPY {pasta} {pasta}" in dockerfile
+
+
+def test_chat_returns_clear_message_when_llm_is_overloaded(tmp_path, monkeypatch):
+    """503 do Gemini no chat vira mensagem clara (HTTP 503), não 'Erro interno'."""
+    class Sobrecarregado:
+        name = "g"
+        def extract(self, *a): return {"observacoes": "x"}
+        def generate(self, *a, **k): raise RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+
+    app = _env_app(tmp_path, monkeypatch, llm=Sobrecarregado())
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app) as c:
+        with pdf.open("rb") as f:
+            up = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("x.pdf", f, "application/pdf")}).json()
+        for _ in range(150):
+            ps = c.get(f"/api/cases/{case['id']}").json()["processos"]
+            if ps and ps[0]["estado"] == "pronto":
+                break
+            time.sleep(0.1)
+        r = c.post("/api/chat", json={"question": "Há bloqueio?", "case_id": case["id"], "numero": ps[0]["numero"]})
+    assert r.status_code == 503
+    assert "indisponível ou lento" in r.json()["detail"] and "Erro interno" not in r.json()["detail"]

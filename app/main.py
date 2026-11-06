@@ -22,7 +22,7 @@ from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
 from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
-from .worker import EXTRACT_PREFIX, READY_PREFIX, pages_path, run_worker
+from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -340,7 +340,12 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             docs = [d]
         else:
             docs = []
-        return rag.answer(body.question, docs, s, store, llm)
+        try:
+            return rag.answer(body.question, docs, s, store, llm)
+        except Exception as e:  # noqa: BLE001  falha do provedor de IA: mensagem clara, sem 'Erro interno'
+            from .llm import _is_transient
+
+            raise HTTPException(503 if _is_transient(e) else 502, explain_llm_error(e))
 
     static = Path(__file__).resolve().parent.parent / "static"
     app.mount("/", StaticFiles(directory=static, html=True), name="static")
