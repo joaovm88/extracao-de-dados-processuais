@@ -169,7 +169,8 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             t_ia = time.perf_counter()
             out = ex.extract_with_llm(sheet, prompt, context, llm, sistema)
             result["medidas"] = {"contexto": info, "tokens": getattr(llm, "last_usage", None),
-                                 "extracao_s": round(time.perf_counter() - t_ia, 1)}
+                                 "extracao_s": round(time.perf_counter() - t_ia, 1),
+                                 "chamada": getattr(llm, "last_call", None)}
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
                           revisar=out["_revisar"], modo="llm", provedor=llm.name)

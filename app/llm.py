@@ -53,6 +53,16 @@ class _UsageMixin:
     def last_usage(self) -> Optional[dict]:
         return getattr(self._tls, "u", None) if self._tls is not None else None
 
+    def _set_call(self, tentativas: int, espera_s: float, modelo: str) -> None:
+        if self._tls is None:
+            self._tls = threading.local()
+        self._tls.c = {"tentativas": tentativas, "espera_s": round(espera_s, 1), "modelo": modelo}
+
+    @property
+    def last_call(self) -> Optional[dict]:
+        """Da última chamada bem-sucedida: quantas tentativas foram feitas, quanto tempo se esperou entre elas e o modelo que respondeu."""
+        return getattr(self._tls, "c", None) if self._tls is not None else None
+
 
 class GeminiProvider(_UsageMixin):
     name = "gemini"
@@ -73,11 +83,15 @@ class GeminiProvider(_UsageMixin):
             models.append(self.fallback_model)
         tentativas, backoff = (4, TRANSIENT_BACKOFF) if patient else (2, (5,))
         last: Optional[Exception] = None
+        feitas, esperou = 0, 0.0
         for model in models:
             kw["model"] = model
             for attempt in range(tentativas):
                 try:
-                    return self.client.models.generate_content(**kw)
+                    feitas += 1
+                    resp = self.client.models.generate_content(**kw)
+                    self._set_call(feitas, esperou, model)
+                    return resp
                 except Exception as e:  # noqa: BLE001
                     last = e
                     delay = _retry_delay(e)
@@ -88,7 +102,9 @@ class GeminiProvider(_UsageMixin):
                         raise  # no chat não vale esperar tanto: o analista tenta de novo
                     if attempt == tentativas - 1:
                         break
-                    time.sleep(delay if delay is not None else backoff[attempt])
+                    espera = delay if delay is not None else backoff[attempt]
+                    esperou += espera
+                    time.sleep(espera)
         assert last is not None
         raise last
 

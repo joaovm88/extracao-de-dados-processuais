@@ -20,6 +20,7 @@ class FakeLLM:
     """Provedor falso: devolve o payload e registra as chamadas."""
     name = "fake"
     last_usage = {"entrada": 1000, "saida": 50, "raciocinio": None}
+    last_call = {"tentativas": 1, "espera_s": 0.0, "modelo": "fake"}
 
     def __init__(self, payload):
         self.payload, self.calls = payload, []
@@ -742,9 +743,37 @@ def test_measurements_are_recorded_for_pdf_and_extraction_and_exposed_in_sheet(e
     d = wait(c, up["id"])
     m = d["result"]["medidas"]
     assert m["tokens"] == {"entrada": 1000, "saida": 50, "raciocinio": None}
+    assert m["chamada"] == {"tentativas": 1, "espera_s": 0.0, "modelo": "fake"}
     assert m["contexto"]["cortado"] is False and m["contexto"]["paginas_total"] == 3 and m["contexto"]["paginas_enviadas"] == 3
     assert m["extracao_s"] >= 0
     t = d["metadata"]["tempos"]
     assert t["paginas"] == 3 and t["total_s"] >= 0 and t["ocr_paginas"] == 0
     linha = c.get(f"/api/cases/{case['id']}/sheet").json()["linhas"][0]
     assert linha["medidas"]["tokens"]["entrada"] == 1000 and linha["docs"][0]["tempos"]["paginas"] == 3
+
+
+def test_provider_reports_attempts_wait_and_model_that_answered(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    class Models:
+        def __init__(self, falha_modelo, vezes):
+            self.f, self.v, self.n = falha_modelo, vezes, 0
+
+        def generate_content(self, model, contents, config):
+            self.n += 1
+            if model == self.f and self.n <= self.v:
+                raise RuntimeError("503 UNAVAILABLE high demand")
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    schema = ex.tool_schema(SHEETS["outras_acoes"])
+    g = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 2)))
+    assert g.last_call is None
+    g.extract("s", "u", schema)
+    assert g.last_call == {"tentativas": 3, "espera_s": 35.0, "modelo": "p"}  # 10 s + 25 s de espera antes do acerto
+
+    g2 = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 99)), fallback_model="r")
+    g2.extract("s", "u", schema)
+    assert g2.last_call["modelo"] == "r" and g2.last_call["tentativas"] == 5 and g2.last_call["espera_s"] == 85.0

@@ -327,7 +327,7 @@ function renderMed() {
   $('med-tab').tBodies[0].innerHTML = ls.map(l => { const m = l.medidas, c = m?.contexto, tk = m?.tokens, d = l.docs.map(x => x.tempos).filter(Boolean);
     return `<tr><td><span class="num">${esc(l.numero)}</span></td><td>${c ? c.paginas_total : (l.paginas ?? '—')}</td>
       <td>${c ? `${c.paginas_enviadas} de ${c.paginas_total} ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">inteiro</span>'}<div class="muted">${fmtN(c.caracteres_enviados)} de ${fmtN(c.caracteres_total)} caracteres</div>` : '—'}</td>
-      <td>${tk ? `${fmtN(tk.entrada)} / ${fmtN((tk.saida || 0) + (tk.raciocinio || 0))}` : '—'}</td><td>${m ? fmtT(m.extracao_s) : '—'}</td>
+      <td>${tk ? `${fmtN(tk.entrada)} / ${fmtN((tk.saida || 0) + (tk.raciocinio || 0))}` : '—'}</td><td>${m ? `${fmtT(m.extracao_s)}${m.chamada ? `<div class="muted" title="Modelo que respondeu: ${esc(m.chamada.modelo)}">${m.chamada.tentativas} tentativa(s)${m.chamada.espera_s ? ` · ${fmtT(m.chamada.espera_s)} de espera` : ''}</div>` : ''}` : '—'}</td>
       <td>${d.length ? `${fmtT(sum(d, t => t.total_s))}<div class="muted">OCR: ${sum(d, t => t.ocr_paginas)} pág. em ${fmtT(sum(d, t => t.ocr_s))}</div>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nenhum processo com PDF enviado ainda.</td></tr>';
 }
 $('btn-med').onclick = () => { renderMed(); $('dlg-med').showModal(); };
