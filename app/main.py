@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from . import rag
 from .config import Settings
 from . import template as tpl
+from . import view
 from .export import build_case_xlsx
 from .llm import get_llm
 from .ingest.citation import parse_filename
@@ -126,6 +127,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                           "estado": _estado(p), "modelo": res["prompt"] if res else None,
                           "documentos": [d["id"] for d in docs if d["numero_processo"] == p["numero"]]})
         return {**c, "processos": procs, "documentos": docs}
+
+    @app.get("/api/cases/{cid}/sheet")
+    def case_sheet(cid: str):
+        """Tudo que a 'planilha viva' precisa numa chamada: abas, colunas (do modelo, se houver) e uma linha por processo."""
+        _case(cid)
+        tp = _tpl_path(cid)
+        return view.build(db.list_processes(cid), db.list(cid), tp.read_bytes() if tp.exists() else None, _estado)
 
     @app.get("/api/cases/{cid}/processes/{numero}")
     def get_process(cid: str, numero: str):

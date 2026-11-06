@@ -7,106 +7,123 @@
 <link rel="stylesheet" href="/app.css">
 </head>
 <body>
-<header class="topbar"><div class="wrap bar">
-  <a class="brand" href="#" id="home"><span class="logo" aria-hidden="true">§</span><span><b>Análise de Processos</b><small>Relatórios de execução e penhoras</small></span></a>
-  <span class="chip" id="llm" title="Provedor de IA configurado">IA…</span>
-</div></header>
-
-<!-- LISTA DE CASOS -->
-<main class="wrap" id="view-cases">
-  <div class="page-head"><div><h1>Casos</h1><p class="lead">Cada caso reúne os processos de um devedor ou grupo e gera <b>uma única planilha</b>.</p></div></div>
-  <form id="new-case" class="card inline">
-    <label for="case-name" class="sr">Nome do caso</label>
-    <input id="case-name" type="text" placeholder="Nome do devedor ou grupo, ex.: Recapagem Alterosa Ltda." required>
-    <button class="btn primary">Criar caso</button>
-  </form>
-  <ul id="cases" class="cases"></ul>
-</main>
-
-<!-- ÁREA DE TRABALHO DO CASO -->
-<main class="wrap hidden" id="view-case">
-  <div class="page-head">
-    <div>
-      <nav class="crumbs" aria-label="Você está aqui"><a href="#" id="crumb-home">Casos</a> <span>›</span> <span id="crumb"></span></nav>
-      <h1 id="case-title"></h1>
+<div class="app">
+  <!-- BARRA SUPERIOR -->
+  <header class="top">
+    <a class="logo" href="#" id="home" title="Início"><span class="mark" aria-hidden="true">§</span><b>Análise de Processos</b></a>
+    <div class="case-switch" id="case-switch" hidden>
+      <label for="case-select" class="sr">Caso</label>
+      <select id="case-select"></select>
+      <button class="icon-btn" id="case-new" title="Novo caso" aria-label="Novo caso">＋</button>
     </div>
-    <a class="btn primary big" id="export" href="#">⬇ Baixar planilha (.xlsx)</a>
-  </div>
+    <span class="spacer"></span>
+    <span class="chip" id="llm" title="Provedor de IA">IA…</span>
+    <button class="btn ghost" id="btn-tpl" disabled><span aria-hidden="true">▤</span> Planilha-modelo <i class="dot" id="tpl-dot" hidden></i></button>
+    <button class="btn" id="btn-upload" disabled><span aria-hidden="true">⬆</span> Upload de Processo (PDF)</button>
+    <a class="btn primary" id="export" href="#" aria-disabled="true"><span aria-hidden="true">⬇</span> Exportar Planilha Corporativa (.xlsx)</a>
+  </header>
 
-  <ol class="steps" id="steps" aria-label="Etapas">
-    <li id="st-1"><i>1</i><span><b>Planilha-modelo</b><small id="st-1t"></small></span></li>
-    <li id="st-2"><i>2</i><span><b>PDFs</b><small id="st-2t"></small></span></li>
-    <li id="st-3"><i>3</i><span><b>Revisão</b><small id="st-3t"></small></span></li>
-    <li id="st-4"><i>4</i><span><b>Relatório</b><small id="st-4t"></small></span></li>
-  </ol>
-
-  <section class="setup">
-    <div class="card" id="card-tpl">
-      <h2>1 · Planilha-modelo <span class="chip" id="tpl-chip" hidden></span></h2>
-      <p class="hint">Importe a planilha do caso (.xlsx). Os processos são lidos da aba <b>Mcfly</b> (ou <b>Relatório</b>) e o relatório final sai como <b>cópia dela, preenchida</b>. Linhas que já existem só recebem as células vazias.</p>
-      <div class="filebar">
-        <input type="file" id="tpl" accept=".xlsx" class="sr"><label for="tpl" class="btn">Escolher planilha</label>
-        <span class="filename" id="tpl-name">nenhum arquivo</span>
-        <button class="btn primary" id="tpl-btn">Importar</button>
-        <button class="btn danger-ghost" id="tpl-del" hidden>Remover</button>
-      </div>
-      <p class="msg" id="tpl-msg" role="status"></p>
-      <details id="tpl-details" hidden><summary>Ver como a planilha foi reconhecida</summary><div id="tpl-report"></div></details>
+  <!-- INÍCIO: ESCOLHA DO CASO -->
+  <main class="welcome" id="welcome">
+    <div class="welcome-in">
+      <h1>Casos</h1>
+      <p class="muted">Cada caso reúne os processos de um devedor ou grupo e gera <b>uma única planilha</b>.</p>
+      <form id="new-case" class="row-form">
+        <label for="case-name" class="sr">Nome do caso</label>
+        <input id="case-name" type="text" placeholder="Nome do devedor ou grupo, ex.: Recapagem Alterosa Ltda." required>
+        <button class="btn primary">Criar caso</button>
+      </form>
+      <ul id="cases" class="cases"></ul>
     </div>
+  </main>
 
-    <div class="card" id="card-up">
-      <h2>2 · Enviar PDFs</h2>
-      <div class="selects">
-        <div><label for="tipo">Tipo do processo</label><select id="tipo"><option value="">Automático (pela classe)</option></select></div>
-        <div><label for="sistema">Sistema</label><select id="sistema"><option value="">Automático</option></select></div>
+  <!-- ÁREA DE TRABALHO: PLANILHA VIVA (70%) + ASSISTENTE (30%) -->
+  <div class="work hidden" id="work">
+    <section class="sheet-area" id="sheet-area">
+      <div class="toolbar">
+        <div class="tabs" id="tabs" role="tablist" aria-label="Abas da planilha"></div>
+        <span class="spacer"></span>
+        <span class="pill" id="pill-busy" hidden></span>
+        <button class="pill btn-pill" id="btn-docs">📎 PDFs <span id="docs-n"></span></button>
       </div>
-      <div class="drop" id="drop" tabindex="0" role="button" aria-label="Arraste PDFs aqui ou clique para escolher">
-        <input type="file" id="pdfs" accept="application/pdf" multiple class="sr">
-        <b>Arraste os PDFs aqui</b><span>ou clique para escolher · várias partes do mesmo processo viram uma só linha</span>
-        <div id="picked" class="picked"></div>
-      </div>
-      <div class="filebar"><button class="btn primary" id="pdfs-btn" disabled>Enviar PDFs</button><span class="msg" id="msg" role="status"></span></div>
-    </div>
-  </section>
+      <div class="banner" id="banner" hidden></div>
+      <div class="grid-wrap" id="grid-wrap"><table id="grid"></table><div class="grid-empty" id="grid-empty" hidden></div></div>
+    </section>
 
-  <section class="workspace">
-    <div class="main-col">
-      <div class="card">
-        <div class="card-head"><h2>Processos</h2><span class="count" id="count"></span></div>
-        <div class="scroll"><table id="procs"><thead><tr><th>Processo</th><th>Classe</th><th>Modelo</th><th>PDFs</th><th>Situação</th></tr></thead><tbody></tbody></table></div>
-        <p class="hint" id="orphans"></p>
+    <aside class="assist" id="assist" aria-label="Assistente">
+      <div class="assist-head">
+        <div><b>Assistente</b><small id="assist-sub">Selecione uma linha</small></div>
+        <button class="icon-btn" id="assist-close" aria-label="Recolher painel" title="Recolher painel">⟩</button>
       </div>
-      <details class="card" id="docs-card">
-        <summary><h2 style="display:inline">PDFs enviados</h2> <span class="count" id="docs-count"></span></summary>
-        <div class="scroll"><table id="docs"><thead><tr><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div>
-      </details>
-    </div>
-
-    <aside class="side card" id="side" aria-live="polite">
-      <div class="empty" id="side-empty">
-        <div class="empty-ico" aria-hidden="true">📄</div>
-        <b>Selecione um processo</b>
-        <p>Clique em uma linha <b>pronta</b> para revisar a extração e conversar com o assistente sobre aquele processo.</p>
+      <div class="assist-empty" id="assist-empty">
+        <div class="ico" aria-hidden="true">💬</div>
+        <b>Converse com o processo</b>
+        <p>Clique em uma linha da planilha para ver a situação, os PDFs e perguntar ao assistente sobre aquele processo.</p>
       </div>
-      <div id="side-body" hidden>
-        <div class="side-head">
-          <div><small>Processo</small><h2 id="side-title"></h2><div id="side-chips" class="chips"></div></div>
-          <button class="icon" id="side-close" aria-label="Fechar painel">✕</button>
-        </div>
-        <div class="tabs" role="tablist">
-          <button role="tab" id="tab-rev" class="on" aria-selected="true">Revisão</button>
-          <button role="tab" id="tab-chat" aria-selected="false">Assistente</button>
-        </div>
-        <section id="pane-rev"><form id="rev-form"></form></section>
-        <section id="pane-chat" hidden>
+      <div class="assist-body" id="assist-body" hidden>
+        <div id="assist-info"></div>
+        <div class="chat" id="chat-box">
           <div id="suggest" class="suggest"></div>
-          <div id="log" class="log"></div>
-          <form id="chat" class="chatbar"><input id="q" type="text" placeholder="Pergunte sobre este processo…" autocomplete="off"><button class="btn primary" id="ask">Enviar</button></form>
-        </section>
+          <div id="log" class="log" aria-live="polite"></div>
+          <form id="chat" class="chatbar"><label for="q" class="sr">Pergunta</label><input id="q" type="text" placeholder="Pergunte sobre este processo…" autocomplete="off"><button class="btn primary" id="ask" aria-label="Enviar">➤</button></form>
+        </div>
       </div>
     </aside>
-  </section>
-</main>
+    <button class="edge-btn" id="assist-open" hidden title="Abrir assistente">💬 Assistente</button>
+  </div>
+</div>
+
+<!-- JANELAS -->
+<dialog id="dlg-upload"><form method="dialog" class="dlg">
+  <header><h2>Upload de Processo (PDF)</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body">
+    <div class="two">
+      <div><label for="tipo">Tipo do processo</label><select id="tipo"><option value="">Automático (pela classe)</option></select></div>
+      <div><label for="sistema">Sistema</label><select id="sistema"><option value="">Automático</option></select></div>
+    </div>
+    <div class="drop" id="drop" tabindex="0" role="button" aria-label="Arraste PDFs ou clique para escolher">
+      <input type="file" id="pdfs" accept="application/pdf" multiple class="sr">
+      <b>Arraste os PDFs aqui</b><span>ou clique para escolher · partes do mesmo processo viram uma só linha</span>
+    </div>
+    <ul class="picked" id="picked"></ul>
+    <p class="msg" id="msg" role="status"></p>
+  </div>
+  <footer><button class="btn" value="x">Fechar</button><button class="btn primary" id="pdfs-btn" type="button" disabled>Enviar PDFs</button></footer>
+</form></dialog>
+
+<dialog id="dlg-tpl"><form method="dialog" class="dlg">
+  <header><h2>Planilha-modelo do caso</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body">
+    <p class="muted">Importe a planilha do caso (.xlsx). Os processos são lidos da aba <b>Mcfly</b> (ou <b>Relatório</b>) e as colunas da tabela seguem as abas dela. O arquivo exportado é <b>uma cópia dela, preenchida</b>; células que já têm conteúdo não são sobrescritas.</p>
+    <div class="filebar">
+      <input type="file" id="tpl" accept=".xlsx" class="sr"><label for="tpl" class="btn">Escolher planilha</label>
+      <span class="filename" id="tpl-name">nenhum arquivo</span>
+    </div>
+    <p class="msg" id="tpl-msg" role="status"></p>
+    <div id="tpl-report"></div>
+  </div>
+  <footer><button class="btn danger-ghost" id="tpl-del" type="button" hidden>Remover modelo</button><span class="spacer"></span><button class="btn" value="x">Fechar</button><button class="btn primary" id="tpl-btn" type="button">Importar</button></footer>
+</form></dialog>
+
+<dialog id="dlg-docs" class="wide"><form method="dialog" class="dlg">
+  <header><h2>PDFs enviados</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body"><div class="scroll"><table class="plain" id="docs"><thead><tr><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div></div>
+  <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
+</form></dialog>
+
+<dialog id="dlg-notes" class="wide"><form method="dialog" class="dlg">
+  <header><div><h2>Observações relevantes</h2><small class="muted" id="notes-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body"><label for="notes-text" class="sr">Observações</label><textarea id="notes-text"></textarea><p class="cit" id="notes-cit"></p></div>
+  <footer><button class="btn" value="x">Cancelar</button><button class="btn primary" id="notes-save" type="button">Salvar</button></footer>
+</form></dialog>
+
+<dialog id="dlg-case"><form method="dialog" class="dlg" id="case-form">
+  <header><h2>Novo caso</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body"><label for="case-name2">Nome do devedor ou grupo</label><input id="case-name2" type="text" required></div>
+  <footer><button class="btn" value="x" formnovalidate>Cancelar</button><button class="btn primary" id="case-ok" type="button">Criar caso</button></footer>
+</form></dialog>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
 <script src="/app.js"></script>
 </body>
 </html>

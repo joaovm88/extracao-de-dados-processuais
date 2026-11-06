@@ -150,3 +150,27 @@ def test_tipos_endpoint_exposes_field_titles_and_closed_lists_for_the_ui(tmp_pat
     g = t["campos"]["execucoes_fiscais"]["garantia"]
     assert g["titulo"] == "EXIT. GARANTIA" and "IMÓVEL" in g["opcoes"]
     assert t["campos"]["execucoes_fiscais"]["observacoes"]["opcoes"] is None
+
+
+def test_sheet_endpoint_columns_follow_the_template_and_rows_carry_state(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    with TestClient(create_app(Settings())) as c:
+        case = c.post("/api/cases", json={"nome": "A"}).json()
+        padrao = c.get(f"/api/cases/{case['id']}/sheet").json()
+        ef = next(a for a in padrao["abas"] if a["key"] == "execucoes_fiscais")
+        assert [x["key"] for x in ef["colunas"]][:2] == ["numero", "polo_passivo"] and len(ef["colunas"]) == 17
+        assert next(x for x in ef["colunas"] if x["key"] == "garantia")["opcoes"]  # lista fechada
+        assert next(x for x in ef["colunas"] if x["key"] == "polo_passivo")["fonte"] == "mcfly"  # capa: só leitura
+
+        c.post(f"/api/cases/{case['id']}/template", files={"file": ("m.xlsx", modelo())})
+        t = c.get(f"/api/cases/{case['id']}/sheet").json()
+        ef2 = next(a for a in t["abas"] if a["key"] == "execucoes_fiscais")
+        titulos = [x["titulo"] for x in ef2["colunas"]]
+        assert "Coluna Nova do Analista" not in titulos and len(ef2["colunas"]) == 8  # só as reconhecidas, na ordem do modelo
+        assert titulos[0] == "Número do processo judicial"
+        linha = t["linhas"][0]
+        assert linha["numero"] == "0341609-70.2005.8.13.0261" and linha["aba"] == "execucoes_fiscais"
+        assert linha["estado"] == "sem_pdf" and linha["valores"]["classe"] == "Execução Fiscal (SIDA)"
+        assert ef2["n"] == 1 and t["bens"] == [] and t["documentos"] == []

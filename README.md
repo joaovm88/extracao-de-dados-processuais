@@ -8,6 +8,12 @@ Front-end (casos, upload, revisão, chat) → API (FastAPI) → Fila (Redis) →
    → extração estruturada por LLM — Google Gemini (AI Studio) ou Anthropic (prompts versionados em prompts/) → revisão humana → .xlsx no layout do modelo
 ```
 
+## A tela: planilha viva + assistente (tela única)
+- **Barra superior:** caso, *Planilha-modelo*, **Upload de Processo (PDF)** e **Exportar Planilha Corporativa (.xlsx)**.
+- **Esquerda (~70%):** a **planilha viva**, uma aba por tipo (Execuções Fiscais, Outras Ações, Embargos, Outros Bens, Fraudes), uma linha por processo, com as colunas da planilha-modelo do caso (ou o layout padrão). Edite direto na célula: salva sozinho, listas fechadas viram menus, observações abrem numa janela. A capa (Mcfly) é somente leitura. Passe o mouse numa célula para ver a origem (Evento/ID e página). Linhas em amarelo estão *a revisar*, verde = revisado, vermelho = erro. Arraste PDFs para a tabela para enviar.
+- **Direita (~30%, retrátil):** o **assistente** do processo selecionado, com a situação, os erros (com *Tentar novamente*), os PDFs do processo (reprocessar, excluir), *Refazer extração* e o chat com perguntas sugeridas e **Adicionar às observações**.
+- Em telas pequenas o assistente abre como painel sobre a planilha.
+
 ## Uma planilha por caso, uma linha por processo
 O relatório é **por caso** (devedor/grupo): uma única planilha com todos os processos. Um processo pode vir em **vários PDFs** (volumes `V001_001-1-50`, `V001_001-51-90`…, ou `PARTE_1`, `PARTE_2`): cada PDF é lido isoladamente (OCR/indexação), mas a extração por IA roda **uma vez por processo**, juntando todas as partes na ordem dos autos, e gera **uma linha** em cada aba. A extração só começa quando todos os PDFs enviados do caso terminam, para não gastar LLM a cada parte.
 - Reenviar a mesma parte (mesmo processo/volume/página inicial) substitui a anterior.
