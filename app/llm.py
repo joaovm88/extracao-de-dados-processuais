@@ -37,7 +37,16 @@ TRANSIENT_BACKOFF = (10, 25, 50)
 def _is_transient(e: Exception) -> bool:
     """Sobrecarga/indisponibilidade momentânea do serviço (HTTP 503/502/504)."""
     txt = str(e).lower()
-    return any(k in txt for k in ("503", "502", "504", "unavailable", "high demand", "overloaded"))
+    return any(k in txt for k in ("503", "502", "504", "unavailable", "high demand", "overloaded",
+                                  "timed out", "timeout", "deadline", "disconnected", "connection reset"))
+
+
+def _resumo_erro(e: Exception) -> str:
+    t = str(e).lower()
+    for k, v in (("503", "503"), ("429", "429"), ("timeout", "timeout"), ("timed out", "timeout"), ("deadline", "timeout"), ("504", "504"), ("502", "502")):
+        if k in t:
+            return v
+    return "erro"
 
 
 class _UsageMixin:
@@ -53,10 +62,10 @@ class _UsageMixin:
     def last_usage(self) -> Optional[dict]:
         return getattr(self._tls, "u", None) if self._tls is not None else None
 
-    def _set_call(self, tentativas: int, espera_s: float, modelo: str) -> None:
+    def _set_call(self, tentativas: int, espera_s: float, modelo: str, tempos: Optional[list] = None) -> None:
         if self._tls is None:
             self._tls = threading.local()
-        self._tls.c = {"tentativas": tentativas, "espera_s": round(espera_s, 1), "modelo": modelo}
+        self._tls.c = {"tentativas": tentativas, "espera_s": round(espera_s, 1), "modelo": modelo, "tempos": tempos or []}
 
     @property
     def last_call(self) -> Optional[dict]:
@@ -67,12 +76,30 @@ class _UsageMixin:
 class GeminiProvider(_UsageMixin):
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str, client=None, fallback_model: str = "") -> None:
+    def __init__(self, api_key: str, model: str, client=None, fallback_model: str = "", thinking: str = "",
+                 timeout_s: float = 0) -> None:
         if client is None:
             from google import genai
+            from google.genai import types
 
-            client = genai.Client(api_key=api_key)
+            # timeout por tentativa: uma chamada travada não pode ocupar minutos sem que a nova tentativa comece
+            opts = types.HttpOptions(timeout=int(timeout_s * 1000)) if timeout_s else None
+            client = genai.Client(api_key=api_key, http_options=opts)
         self.client, self.model, self.fallback_model = client, model, fallback_model
+        self.thinking = (thinking or "").strip().lower()
+
+    def _thinking_cfg(self, model: str):
+        """Esforço de raciocínio do modelo ('low'/'medium'/'high'; vazio = padrão do modelo). Menos raciocínio = resposta mais rápida."""
+        if self.thinking not in ("low", "medium", "high"):
+            return None
+        from google.genai import types
+
+        m = model.lower()
+        if "gemini-3" in m:
+            return types.ThinkingConfig(thinking_level=self.thinking)
+        if "2.5" in m:
+            return types.ThinkingConfig(thinking_budget={"low": 1024, "medium": 4096, "high": -1}[self.thinking])
+        return None
 
     def _call(self, patient: bool = True, **kw):
         """generate_content com novas tentativas. Extração (patient): até 4 tentativas, esperando 10/25/50 s em sobrecarga 503
@@ -83,17 +110,28 @@ class GeminiProvider(_UsageMixin):
             models.append(self.fallback_model)
         tentativas, backoff = (4, TRANSIENT_BACKOFF) if patient else (2, (5,))
         last: Optional[Exception] = None
-        feitas, esperou = 0, 0.0
+        feitas, esperou, tempos = 0, 0.0, []
+        base_cfg = kw.get("config")
         for model in models:
             kw["model"] = model
+            if base_cfg is not None and self.thinking:
+                kw["config"] = base_cfg.model_copy(update={"thinking_config": self._thinking_cfg(model)})
             for attempt in range(tentativas):
+                t0 = time.perf_counter()
                 try:
                     feitas += 1
                     resp = self.client.models.generate_content(**kw)
-                    self._set_call(feitas, esperou, model)
+                    tempos.append({"s": round(time.perf_counter() - t0, 1), "r": "ok"})
+                    self._set_call(feitas, esperou, model, tempos)
                     return resp
                 except Exception as e:  # noqa: BLE001
                     last = e
+                    tempos.append({"s": round(time.perf_counter() - t0, 1), "r": _resumo_erro(e)})
+                    if "thinking" in str(e).lower() and "INVALID_ARGUMENT" in str(e) and kw.get("config") is not None \
+                            and getattr(kw["config"], "thinking_config", None) is not None:
+                        kw["config"] = kw["config"].model_copy(update={"thinking_config": None})  # modelo não aceita: segue sem
+                        base_cfg = kw["config"]; self.thinking = ""
+                        continue
                     delay = _retry_delay(e)
                     transient = _is_transient(e)
                     if delay is None and not transient:
@@ -191,7 +229,8 @@ def _loads(text: Optional[str]) -> dict:
 def get_llm(s: Settings) -> Optional[LLMProvider]:
     p = s.llm_provider
     if p == "gemini" or (p == "auto" and s.gemini_api_key):
-        return GeminiProvider(s.gemini_api_key, s.gemini_model, fallback_model=s.gemini_fallback_model) if s.gemini_api_key else None
+        return GeminiProvider(s.gemini_api_key, s.gemini_model, fallback_model=s.gemini_fallback_model,
+                                              thinking=s.gemini_thinking, timeout_s=s.gemini_timeout_s) if s.gemini_api_key else None
     if p == "anthropic" or (p == "auto" and s.anthropic_api_key):
         return AnthropicProvider(s.anthropic_api_key, s.llm_model) if s.anthropic_api_key else None
     return None

@@ -772,11 +772,38 @@ def test_provider_reports_attempts_wait_and_model_that_answered(monkeypatch):
     g = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 2)))
     assert g.last_call is None
     g.extract("s", "u", schema)
-    assert g.last_call == {"tentativas": 3, "espera_s": 35.0, "modelo": "p"}  # 10 s + 25 s de espera antes do acerto
+    c = g.last_call
+    assert (c["tentativas"], c["espera_s"], c["modelo"]) == (3, 35.0, "p")  # 10 s + 25 s de espera antes do acerto
+    assert [t["r"] for t in c["tempos"]] == ["503", "503", "ok"]  # duração e resultado de cada tentativa
 
     g2 = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 99)), fallback_model="r")
     g2.extract("s", "u", schema)
     assert g2.last_call["modelo"] == "r" and g2.last_call["tentativas"] == 5 and g2.last_call["espera_s"] == 85.0
+
+
+def test_gemini_thinking_level_by_model_and_timeout_counts_as_transient(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    vistos = []
+
+    class Models:
+        n = 0
+
+        def generate_content(self, model, contents, config):
+            vistos.append((model, config.thinking_config))
+            Models.n += 1
+            if Models.n == 1:
+                raise RuntimeError("ReadTimeout: The read operation timed out")  # tentativa travada: tenta de novo
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    g = GeminiProvider("k", "gemini-3.1-pro-preview", SimpleNamespace(models=Models()), thinking="low")
+    g.extract("s", "u", ex.tool_schema(SHEETS["outras_acoes"]))
+    assert g.last_call["tentativas"] == 2 and g.last_call["tempos"][0]["r"] == "timeout"
+    assert vistos[0][1].thinking_level.value.lower() == "low"
+    assert g._thinking_cfg("gemini-2.5-flash").thinking_budget == 1024 and g._thinking_cfg("outro-modelo") is None
+    assert GeminiProvider("k", "m", SimpleNamespace(models=Models()))._thinking_cfg("gemini-3-flash") is None  # vazio = padrão
 
 
 def test_execucao_fiscal_prompt_is_chronology_only():
