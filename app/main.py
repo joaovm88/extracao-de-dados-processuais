@@ -24,7 +24,7 @@ from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
 from .ingest import eventos as ev
 from .ingest import pje
-from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, load_eventos, pages_path, run_worker
+from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, eventos_path, load_eventos, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -135,7 +135,27 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.get("/api/cases")
     def list_cases():
-        return db.list_cases()
+        """Casos com um resumo (processos, PDFs, extraídos, com erro e última atividade) para a tela inicial."""
+        out = []
+        for c in db.list_cases():
+            procs, docs = db.list_processes(c["id"]), db.list(c["id"])
+            out.append({**c, "processos": len(procs), "pdfs": len(docs),
+                        "extraidos": sum(1 for p in procs if p.get("result")),
+                        "erros": sum(1 for p in procs if _estado(p) == "erro") + sum(1 for d in docs if d["status"] == "error"),
+                        "em_andamento": sum(1 for d in docs if d["status"] in ("queued", "processing")) + sum(1 for p in procs if p.get("stale") == 2),
+                        "atividade": max([d.get("updated_at") or 0 for d in docs] + [c.get("created_at") or 0])})
+        return out
+
+    @app.delete("/api/cases/{cid}")
+    def delete_case(cid: str):
+        """Exclui o caso inteiro: processos, PDFs (arquivos, páginas lidas, índice de busca) e planilha-modelo. Não tem volta."""
+        _case(cid)
+        docs = db.list(cid)
+        for d in docs:
+            _remove_doc(d)
+        _tpl_path(cid).unlink(missing_ok=True)
+        db.delete_case(cid)
+        return {"status": "deleted", "documentos": len(docs)}
 
     def _case(cid: str) -> dict:
         c = db.get_case(cid)
@@ -343,6 +363,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         db.delete_doc(d["id"])
         Path(d["path"]).unlink(missing_ok=True)
         pages_path(s, d["id"]).unlink(missing_ok=True)
+        eventos_path(s, d["id"]).unlink(missing_ok=True)
 
     @app.delete("/api/documents/{doc_id}", status_code=202)
     def delete_doc(doc_id: str):

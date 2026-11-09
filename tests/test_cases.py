@@ -874,3 +874,26 @@ def test_gemini_minimal_downgrades_to_low_and_gen3_drops_temperature(monkeypatch
     g.model = "gemini-3.5-flash-lite"
     g.extract("s", "u", schema)
     assert vistos[-1][1] == "minimal" and vistos[-1][2] is None
+
+
+def test_delete_case_removes_everything_and_list_has_summary(env):
+    c, llm, tmp = env
+    cid = c.post("/api/cases", json={"nome": "Apagar"}).json()["id"]
+    outro = c.post("/api/cases", json={"nome": "Fica"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    resumo = next(x for x in c.get("/api/cases").json() if x["id"] == cid)
+    assert resumo["pdfs"] == 1 and resumo["processos"] == 1 and resumo["extraidos"] == 1 and resumo["atividade"]
+    doc_path = c.get(f"/api/documents/{d['id']}").json()["path"]
+    r = c.delete(f"/api/cases/{cid}")
+    assert r.status_code == 200 and r.json()["documentos"] == 1
+    assert [x["id"] for x in c.get("/api/cases").json()] == [outro]
+    assert c.get(f"/api/documents/{d['id']}").status_code == 404 and not __import__("pathlib").Path(doc_path).exists()
+    assert c.delete(f"/api/cases/{cid}").status_code == 404
+
+
+def test_timeout_504_has_its_own_orientation():
+    from app.worker import explain_llm_error
+    msg = explain_llm_error(RuntimeError("504 DEADLINE_EXCEEDED. Deadline expired before operation could complete."))
+    assert msg.startswith("O Gemini não respondeu a tempo (504)") and "Detalhe técnico:" in msg

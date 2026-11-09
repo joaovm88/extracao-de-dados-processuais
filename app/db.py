@@ -93,6 +93,14 @@ class MetadataDB:
             r = self._conn.execute("SELECT * FROM cases WHERE nome='Avulsos'").fetchone()
         return dict(r) if r else self.create_case("Avulsos")
 
+    def delete_case(self, cid: str) -> None:
+        """Remove o caso com seus processos e registros de PDFs (os arquivos são apagados por quem chama)."""
+        with self._lock:
+            for t in ("documents", "processes"):
+                self._conn.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
+            self._conn.execute("DELETE FROM cases WHERE id=?", (cid,))
+            self._conn.commit()
+
     def list_cases(self) -> list[dict]:
         with self._lock:
             return [dict(r) for r in self._conn.execute("SELECT * FROM cases ORDER BY created_at DESC")]

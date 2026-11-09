@@ -37,7 +37,10 @@ def explain_llm_error(e: Exception) -> str:
     elif "404" in low or "not_found" in low or "is not found" in low or "not supported" in low:
         dica = ("Modelo do Gemini indisponível para a sua conta (modelos antigos saem do ar para contas novas). Ajuste GEMINI_MODEL "
                 "no .env para um modelo listado no AI Studio, ou liste os disponíveis com o comando do README, e reinicie com docker compose up.")
-    elif "503" in low or "unavailable" in low or "overloaded" in low or "timeout" in low or "deadline" in low:
+    elif "504" in low or "deadline" in low or "timed out" in low or "timeout" in low:
+        dica = ("O Gemini não respondeu a tempo (504). O processo é grande ou o serviço está lento. Tente novamente; se repetir, "
+                "use um modelo mais rápido ou reduza o texto enviado (CONTEXT_BUDGET_CHARS).")
+    elif "503" in low or "unavailable" in low or "overloaded" in low:
         dica = "O serviço do Gemini está indisponível ou lento no momento. Tente novamente em alguns minutos."
     elif "json" in low:
         dica = "A IA devolveu uma resposta fora do formato esperado. Tente novamente."

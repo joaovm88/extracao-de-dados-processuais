@@ -27,15 +27,53 @@ const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], a
 const DST = {queued: ['warn', 'na fila'], processing: ['warn', 'processando'], done: ['ok', 'lido'], error: ['err', 'erro']};
 const MODELO = {execucoes_fiscais: 'Execução fiscal', outras_acoes: 'Outras ações', recursos: 'Recursos'};
 const norm = t => String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function erroInfo(msg) {
+  const [dica, tec] = String(msg || '').split(' Detalhe técnico: ');
+  const T = [
+    [/^Limite de uso/, 'Limite de uso do Gemini', ['Aguarde alguns minutos e use “Tentar novamente”.', 'No nível gratuito há limite de chamadas por minuto e por dia.', 'Se repetir, troque GEMINI_MODEL por um modelo mais leve.']],
+    [/^Chave/, 'Chave do Gemini com problema', ['Confira GEMINI_API_KEY no arquivo .env.', 'Reinicie com docker compose up depois de corrigir.']],
+    [/^Modelo/, 'Modelo indisponível', ['Ajuste GEMINI_MODEL no .env para um modelo listado no AI Studio.', 'Reinicie com docker compose up.']],
+    [/^O Gemini não respondeu/, 'O Gemini demorou demais (504)', ['Use “Tentar novamente”: costuma ser passageiro.', 'Se repetir: modelo mais rápido (Flash / Flash-Lite) e GEMINI_THINKING=low.', 'Ou reduza o texto enviado em CONTEXT_BUDGET_CHARS.']],
+    [/^O serviço/, 'Gemini sobrecarregado (503)', ['Tente novamente em alguns minutos.', 'Configure GEMINI_FALLBACK_MODEL para usar outro modelo nessas horas.']],
+    [/^A IA devolveu/, 'Resposta fora do formato', ['Use “Tentar novamente”.']],
+  ].find(([re]) => re.test(dica)) || [null, 'Falha na extração', ['Use “Tentar novamente”.', 'Se repetir, abra o detalhe técnico e me envie.']];
+  return {titulo: T[1], dica, passos: T[2], tecnico: tec || (T[0] ? '' : dica)};
+}
+const dh = t => t ? new Date(t * 1000).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—';
+function cardErro(l) {
+  const e = erroInfo(l.error), quandoFalhou = l.ext?.fim ? `Falhou em ${dh(l.ext.fim)}${l.ext.inicio ? ` · tentou por ${fmtT(l.ext.fim - l.ext.inicio)}` : ''}` : '';
+  return `<div class="errcard"><div class="ec-head"><span class="ec-ico" aria-hidden="true">⚠</span><div><b>${esc(e.titulo)}</b>${quandoFalhou ? `<div class="muted">${quandoFalhou}</div>` : ''}</div></div>
+    <p>${esc(e.dica.split('. ').slice(0, 2).join('. ').replace(/\.?$/, '.'))}</p><ul>${e.passos.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
+    <div class="acts">${l.docs.length ? '<button class="btn sm primary" data-again>⟳ Tentar novamente</button>' : ''}
+      ${e.tecnico ? '<button class="btn sm" data-copy-err>Copiar detalhe técnico</button>' : ''}</div>
+    ${e.tecnico ? `<details class="ec-tec"><summary>Detalhe técnico</summary><pre>${esc(e.tecnico)}</pre></details>` : ''}</div>`;
+}
 const editable = l => ['pronto', 'desatualizado'].includes(l.estado);
 const row = n => data?.linhas.find(l => l.numero === n);
 
 /* ---------- casos ---------- */
+const quando = t => t ? new Date(t * 1000).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'}) : '—';
 async function loadCases(selectId) {
   const cs = await api('/api/cases');
-  $('cases').innerHTML = cs.map(c => `<li tabindex="0" data-id="${c.id}">${esc(c.nome)}</li>`).join('') || '<li style="cursor:default">Nenhum caso ainda. Crie o primeiro acima.</li>';
+  $('cases').innerHTML = cs.map(c => `<li class="case-card" tabindex="0" data-id="${c.id}">
+      <div class="cc-top"><b class="cc-nome" title="${esc(c.nome)}">${esc(c.nome)}</b>
+        <button class="icon-btn danger" data-del-case="${c.id}" title="Excluir este caso" aria-label="Excluir caso ${esc(c.nome)}">🗑</button></div>
+      <div class="cc-stats"><span><b>${c.processos}</b> ${c.processos === 1 ? 'processo' : 'processos'}</span><span><b>${c.pdfs}</b> ${c.pdfs === 1 ? 'PDF' : 'PDFs'}</span><span><b>${c.extraidos}</b> ${c.extraidos === 1 ? 'extraído' : 'extraídos'}</span></div>
+      <div class="cc-tags">${c.erros ? `<span class="tag err">${c.erros} com erro</span>` : ''}${c.em_andamento ? `<span class="tag blue">${c.em_andamento} em andamento</span>` : ''}${!c.erros && !c.em_andamento && c.pdfs ? '<span class="tag ok">em dia</span>' : ''}${!c.pdfs ? '<span class="tag">sem PDFs</span>' : ''}</div>
+      <div class="cc-foot muted">Última atividade: ${quando(c.atividade)}</div></li>`).join('') || '<li class="case-empty">Nenhum caso ainda. Crie o primeiro acima.</li>';
   $('case-select').innerHTML = cs.map(c => `<option value="${c.id}" ${c.id === (selectId || caseId) ? 'selected' : ''}>${esc(c.nome)}</option>`).join('');
+  casesData = cs;
   document.querySelectorAll('#cases li[data-id]').forEach(li => { li.onclick = () => openCase(li.dataset.id); li.onkeydown = e => e.key === 'Enter' && openCase(li.dataset.id); });
+  document.querySelectorAll('[data-del-case]').forEach(b => b.onclick = e => { e.stopPropagation(); deleteCase(b.dataset.delCase); });
+}
+let casesData = [];
+async function deleteCase(id) {
+  const c = casesData.find(x => x.id === id); if (!c) return;
+  if (!confirm(`Excluir o caso "${c.nome}"?\n\nIsso apaga ${c.processos} processo(s), ${c.pdfs} PDF(s), os resultados e a planilha-modelo deste caso.\nNão tem volta.`)) return;
+  try {
+    await api(`/api/cases/${id}`, {method: 'DELETE'}); toast('Caso excluído', 'ok');
+    if (caseId === id) goHome(); else await loadCases();
+  } catch (e) { toast(e.message, 'err'); }
 }
 async function openCase(id) {
   caseId = id; loadTam(); sel = null; data = null; dataKey = ''; picked = []; renderPicked(); aba = 'execucoes_fiscais';
@@ -54,6 +92,7 @@ async function createCase(nome) {
   const c = await api('/api/cases', json('POST', {nome})); await loadCases(c.id); openCase(c.id);
 }
 $('home').onclick = goHome;
+$('case-del').onclick = () => caseId && deleteCase(caseId);
 $('case-select').onchange = e => openCase(e.target.value);
 $('new-case').onsubmit = async e => { e.preventDefault(); try { await createCase($('case-name').value); $('case-name').value = ''; } catch (err) { toast(err.message, 'err'); } };
 $('case-new').onclick = () => { $('case-name2').value = ''; $('dlg-case').showModal(); $('case-name2').focus(); };
@@ -253,11 +292,11 @@ function renderAssistInfo() {
   const [cls, txt] = ESTADO[l.estado], ed = editable(l);
   const pdfs = l.docs.map(d => { const [dc, dt] = DST[d.status] || ['', d.status];
     return `<div class="pdf"><span class="nm" title="${esc(d.filename)}">${esc(d.filename)}</span><span class="tag ${dc}">${dt}</span>
-      ${d.error ? `<div class="er">${esc(d.error)}</div>` : ''}<button class="icon-btn" data-retry="${d.id}" title="Reprocessar este PDF" aria-label="Reprocessar">⟳</button><button class="icon-btn" data-del="${d.id}" title="Excluir este PDF" aria-label="Excluir">🗑</button></div>`; }).join('');
+      ${d.started_at ? `<div class="muted pdf-h">${d.status === 'error' ? 'Falhou' : 'Lido'}: ${dh(d.started_at)} → ${dh(d.finished_at)}${d.finished_at ? ` (${fmtT(d.finished_at - d.started_at)})` : ''}</div>` : ''}${d.error ? `<div class="er" title="${esc(d.error)}">${esc(String(d.error).slice(0, 160))}${String(d.error).length > 160 ? '…' : ''}</div>` : ''}<button class="icon-btn" data-retry="${d.id}" title="Reprocessar este PDF" aria-label="Reprocessar">⟳</button><button class="icon-btn" data-del="${d.id}" title="Excluir este PDF" aria-label="Excluir">🗑</button></div>`; }).join('');
   $('assist-info').innerHTML = `<div class="info-top"><span class="num">${esc(l.numero)}</span><span class="tag ${cls}">${txt}</span>
       ${ed ? `<span class="tag ${l.reviewed ? 'ok' : 'blue'}">${l.reviewed ? 'revisado' : 'a revisar'}</span>` : ''}
       ${l.modelo ? `<span class="chip">${esc(MODELO[l.modelo] || l.modelo)}</span>` : ''}${l.sistema ? `<span class="chip">${esc(l.sistema)}</span>` : ''}${l.paginas ? `<span class="chip">${l.paginas} págs.</span>` : ''}${l.medidas ? `<span class="chip" title="Páginas enviadas à IA e tokens da extração">IA viu ${l.medidas.contexto.paginas_enviadas}/${l.medidas.contexto.paginas_total} págs. · ${fmtN(l.medidas.tokens?.entrada)} tokens</span>` : ''}</div>
-    ${l.error && !['extraindo', 'aguardando'].includes(l.estado) ? `<div class="alert err"><b>Erro na extração.</b> ${esc(l.error)}${l.docs.length ? `<br><button class="btn sm" data-again>Tentar novamente</button>` : ''}</div>` : ''}
+    ${l.error && !['extraindo', 'aguardando'].includes(l.estado) ? cardErro(l) : ''}
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
     <div class="acts">${ed ? `<button class="btn sm primary" data-toggle-rev>${l.reviewed ? '↺ Marcar como a revisar' : '✓ Marcar como revisado'}</button>` : ''}
@@ -266,6 +305,7 @@ function renderAssistInfo() {
     <details class="pdfs" ${l.docs.some(d => d.status === 'error') ? 'open' : ''}><summary>PDFs deste processo (${l.docs.length})</summary>${pdfs || '<p class="muted">Nenhum PDF enviado para este processo.</p>'}</details>`;
   const q = (s) => $('assist-info').querySelector(s);
   q('[data-again]') && (q('[data-again]').onclick = () => reextract(l.numero, false));
+  q('[data-copy-err]') && (q('[data-copy-err]').onclick = async () => { try { await navigator.clipboard.writeText(`${l.numero}\n${l.error}`); toast('Copiado', 'ok'); } catch (_) { toast('Não foi possível copiar', 'err'); } });
   q('[data-reextract]') && (q('[data-reextract]').onclick = () => reextract(l.numero, true));
   q('[data-eventos]') && (q('[data-eventos]').onclick = () => openEventos(l.numero));
   q('[data-toggle-rev]') && (q('[data-toggle-rev]').onclick = () => setReviewed(l.numero, !l.reviewed));
@@ -365,12 +405,11 @@ function renderMed() {
       ${kpi('Tempo médio por processo', com.length ? fmtT(medIa) : '—', 'só a chamada à IA', 'Média do tempo da chamada à IA por processo extraído. Não inclui a leitura/OCR dos PDFs. Esperas por erro 503 ou limite de uso do provedor entram na conta.')}
       ${kpi('Ritmo estimado', porDia ? `~${porDia}<em> /8 h</em>` : '—', 'um processo por vez; baseado nas medições', 'Projeção de quantos processos cabem em 8 horas, um de cada vez: 8 h ÷ (tempo médio da IA + tempo médio de leitura do PDF). É uma estimativa e muda com o modelo e o tamanho dos processos.')}</div>
     <div class="mrows">
-      <div><div class="mt">PDFs <b>${dc.length}</b></div>${barra(pdfP, dc.length)}${leg(pdfP)}</div>
-      <div><div class="mt">Processos com PDF <b>${comPdf}</b></div>${barra(procP, comPdf)}${leg(procP)}</div>
-      <div><div class="mt">Tempo total <b>${fmtT(leS + iaS)}</b></div>${barra(tmpP, leS + iaS)}${leg(tmpP)}<div class="muted">OCR: ${ocrP} página(s) em ${fmtT(ocrS)}</div></div>
-      <div><div class="mt">Tokens <b>${fmtN(tin + tout)}</b></div>${barra(tokP, tin + tout)}${leg(tokP)}</div></div>
+      <div><div class="mt"><span>PDFs<i class="tip" tabindex="0" data-tip="Arquivos enviados neste caso: lidos com sucesso, em leitura pelo worker, na fila ou com erro.">*</i></span><b>${dc.length}</b></div>${barra(pdfP, dc.length)}${leg(pdfP)}</div>
+      <div><div class="mt"><span>Processos com PDF<i class="tip" tabindex="0" data-tip="A IA viu tudo: o processo coube no limite enviado. Cortados: passou do limite e parte das páginas ficou de fora. Sem extração: aguardando ou com falha.">*</i></span><b>${comPdf}</b></div>${barra(procP, comPdf)}${leg(procP)}</div>
+      <div><div class="mt"><span>Tempo total<i class="tip" tabindex="0" data-tip="Soma do tempo de máquina: leitura dos PDFs (texto e OCR) + tempo de resposta e espera da IA. Não conta o tempo em fila.">*</i></span><b>${fmtT(leS + iaS)}</b></div>${barra(tmpP, leS + iaS)}${leg(tmpP)}<div class="muted">OCR: ${ocrP} página(s) em ${fmtT(ocrS)}</div></div>
+      <div><div class="mt"><span>Tokens<i class="tip" tabindex="0" data-tip="Volume consumido na API (cerca de 2,5 caracteres por token). Entrada = prompt + páginas do PDF; saída = o que a IA devolveu.">*</i></span><b>${fmtN(tin + tout)}</b></div>${barra(tokP, tin + tout)}${leg(tokP)}</div></div>
     ${!com.length ? '<div class="alert warn">Ainda não há extrações com medição. Processos extraídos antes desta versão não têm esses dados: use “Refazer extração”.</div>' : ''}`;
-  const dh = t => t ? new Date(t * 1000).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—';
   const dur = (a, b) => a && b ? fmtT(b - a) : '—';
   const reg = [];
   for (const d of data.documentos) if (d.started_at) reg.push({t: d.started_at, tipo: 'Leitura do PDF', item: d.filename, ini: d.started_at, fim: d.finished_at,
