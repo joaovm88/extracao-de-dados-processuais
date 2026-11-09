@@ -897,3 +897,18 @@ def test_timeout_504_has_its_own_orientation():
     from app.worker import explain_llm_error
     msg = explain_llm_error(RuntimeError("504 DEADLINE_EXCEEDED. Deadline expired before operation could complete."))
     assert msg.startswith("O Gemini não respondeu a tempo (504)") and "Detalhe técnico:" in msg
+
+
+def test_health_shows_version_and_model_and_static_is_not_cached(env):
+    from app import APP_VERSION
+    c, _, _ = env
+    h = c.get("/api/health").json()
+    assert h["versao"] == APP_VERSION and "modelo" in h and "raciocinio" in h
+    r = c.get("/app.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+
+
+def test_compose_passes_the_llm_settings_to_the_containers():
+    texto = open("docker-compose.yml", encoding="utf-8").read()
+    for var in ("GEMINI_THINKING", "GEMINI_THINKING_FALLBACK", "GEMINI_TIMEOUT_S", "GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "CONTEXT_BUDGET_CHARS"):
+        assert f"  {var}:" in texto  # sem isso, o valor do .env não chega ao container

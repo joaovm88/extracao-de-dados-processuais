@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, Response
+from fastapi import Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -24,6 +25,7 @@ from .schemas import SHEETS, SISTEMAS, TIPOS
 from .services import make_db, make_queue, make_store
 from .ingest import eventos as ev
 from .ingest import pje
+from . import APP_VERSION
 from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, eventos_path, load_eventos, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -112,7 +114,11 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     @app.get("/api/health")
     def health():
-        return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": llm.name if llm else None}
+        modelo = (s.gemini_model if llm and llm.name == "gemini" else s.llm_model if llm else None)
+        return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": llm.name if llm else None,
+                "versao": APP_VERSION, "modelo": modelo, "reserva": s.gemini_fallback_model or None,
+                "raciocinio": s.gemini_thinking if llm and llm.name == "gemini" else s.llm_effort if llm else None,
+                "contexto_chars": s.context_budget_chars}
 
     @app.post("/api/format/corresponsaveis")
     def format_corresponsaveis(body: TextIn):
@@ -424,6 +430,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
 
     static = Path(__file__).resolve().parent.parent / "static"
     app.mount("/", StaticFiles(directory=static, html=True), name="static")
+
+    @app.middleware("http")
+    async def no_cache_static(request: Request, call_next):
+        resp = await call_next(request)
+        if not request.url.path.startswith("/api"):  # a tela sempre revalida: nada de JavaScript antigo preso no navegador
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
     return app
 
 
