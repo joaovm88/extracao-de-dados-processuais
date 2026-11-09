@@ -100,3 +100,14 @@ Use um nome da lista sem o prefixo `models/`. Modelos "preview" têm limites men
 - Marcadores de Evento/ID foram escritos para PJe/eproc sem amostra real; só foi testado um PDF digitalizado de processo físico. Valide com PDFs eletrônicos.
 - Embeddings por hashing local (trocar `embed()` em `app/search/base.py` por modelo real melhora a busca).
 - Sem autenticação: adicione SSO/proxy antes de expor (LGPD). OCR real, Redis, Elasticsearch e o LLM não foram exercitados no ambiente de testes (cobertos por simulação).
+
+## Rodar sem Docker (PyCharm, Windows)
+
+Modo simples para um computador sem Docker: fila e busca em memória, tudo num só processo.
+
+1. Python 3.12 e, para PDFs digitalizados, o **Tesseract** com o idioma português (instalador do Windows; o sistema acha o `C:\\Program Files\\Tesseract-OCR\\tesseract.exe` sozinho, ou use `TESSERACT_CMD` no `.env`).
+2. No PyCharm, crie o interpretador (`.venv`) e instale: `pip install -r requirements.txt`.
+3. Copie `.env.example` para `.env` e preencha `GEMINI_API_KEY` (e o modelo).
+4. Botão direito em `run_local.py` > **Run 'run_local'**. Abra `http://localhost:8000`.
+
+Limites: um worker só; o índice de busca em memória se perde ao reiniciar (o chat e os processos muito grandes precisam que os PDFs sejam reprocessados); o programa precisa ficar aberto. O servidor escuta só em `127.0.0.1`.

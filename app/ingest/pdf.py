@@ -18,9 +18,26 @@ class PageResult:
     seconds: float = 0.0  # tempo gasto para ler a página (texto ou OCR)
 
 
+def _configure_tesseract() -> None:
+    """No Windows o Tesseract costuma não estar no PATH: usa TESSERACT_CMD ou o local padrão do instalador."""
+    import os
+    import pytesseract
+
+    cmd = os.environ.get("TESSERACT_CMD", "")
+    if not cmd:
+        for cand in (r"C:\Program Files\Tesseract-OCR\tesseract.exe", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"):
+            if os.path.exists(cand):
+                cmd = cand
+                break
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
+
+
 def ocr_available() -> bool:
     try:
         import pytesseract
+
+        _configure_tesseract()
 
         pytesseract.get_tesseract_version()
         return True
@@ -31,6 +48,8 @@ def ocr_available() -> bool:
 def _ocr_page(page: "fitz.Page", settings: Settings) -> str:
     import pytesseract
     from PIL import Image
+
+    _configure_tesseract()
 
     pix = page.get_pixmap(dpi=settings.ocr_dpi)
     img = Image.open(io.BytesIO(pix.tobytes("png")))

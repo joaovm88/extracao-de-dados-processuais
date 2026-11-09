@@ -2,6 +2,29 @@ import os
 from pathlib import Path
 
 
+def load_dotenv(path: str | Path = ".env") -> int:
+    """Lê um arquivo .env (CHAVE=valor) para o ambiente, sem sobrescrever o que já estiver definido. Para rodar sem Docker
+    (o Docker Compose já lê o .env sozinho). Devolve quantas variáveis definiu."""
+    p = Path(path)
+    if not p.is_file():
+        return 0
+    n = 0
+    for linha in p.read_text(encoding="utf-8-sig").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, valor = linha.split("=", 1)
+        chave, valor = chave.strip(), valor.strip()
+        if valor[:1] in ("'", '"') and valor[-1:] == valor[:1] and len(valor) >= 2:
+            valor = valor[1:-1]
+        else:
+            valor = valor.split(" #", 1)[0].strip()  # comentário no fim da linha
+        if chave and chave not in os.environ:
+            os.environ[chave] = valor
+            n += 1
+    return n
+
+
 class Settings:
     def __init__(self) -> None:
         env = os.environ.get

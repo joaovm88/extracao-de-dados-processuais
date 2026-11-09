@@ -912,3 +912,16 @@ def test_compose_passes_the_llm_settings_to_the_containers():
     texto = open("docker-compose.yml", encoding="utf-8").read()
     for var in ("GEMINI_THINKING", "GEMINI_THINKING_FALLBACK", "GEMINI_TIMEOUT_S", "GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "CONTEXT_BUDGET_CHARS"):
         assert f"  {var}:" in texto  # sem isso, o valor do .env não chega ao container
+
+
+def test_load_dotenv_reads_values_without_overriding(tmp_path, monkeypatch):
+    from app.config import load_dotenv
+    f = tmp_path / ".env"
+    f.write_text('# comentário\nA_X=um\nB_X="dois três"\nC_X=quatro # fim\nJA_TEM=novo\n\nlinha-sem-igual\n', encoding="utf-8")
+    for k in ("A_X", "B_X", "C_X"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("JA_TEM", "original")
+    assert load_dotenv(f) == 3
+    import os
+    assert (os.environ["A_X"], os.environ["B_X"], os.environ["C_X"], os.environ["JA_TEM"]) == ("um", "dois três", "quatro", "original")
+    assert load_dotenv(tmp_path / "nao-existe") == 0
