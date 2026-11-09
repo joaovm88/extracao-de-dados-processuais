@@ -849,3 +849,28 @@ def test_extraction_error_clears_on_retry_and_on_pdf_delete_and_times_are_record
         time.sleep(0.1)
     assert p["error"] is None  # o erro sai junto com o PDF
 
+
+
+def test_gemini_minimal_downgrades_to_low_and_gen3_drops_temperature(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    vistos = []
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            nivel = config.thinking_config.thinking_level.value.lower() if config.thinking_config else None
+            vistos.append((model, nivel, config.temperature))
+            if model == "principal" and nivel == "minimal":
+                raise RuntimeError("400 INVALID_ARGUMENT: thinking level minimal is not supported")
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    g = GeminiProvider("k", "gemini-3.5-flash-lite", SimpleNamespace(models=Models()), thinking="minimal",
+                       fallback_model="gemini-3.8-flash", thinking_fallback="low")
+    schema = ex.tool_schema(SHEETS["outras_acoes"])
+    g._call(model="gemini-3.8-flash", contents="u", config=g._config("s"))  # reserva usa o nível próprio
+    assert vistos[-1] == ("gemini-3.8-flash", "low", None)  # e a temperatura sai nos modelos da família 3
+    g.model = "gemini-3.5-flash-lite"
+    g.extract("s", "u", schema)
+    assert vistos[-1][1] == "minimal" and vistos[-1][2] is None

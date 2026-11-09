@@ -16,8 +16,10 @@ class Settings:
         self.gemini_model = env("GEMINI_MODEL", "gemini-3.1-pro-preview")
         # Modelo reserva usado só quando o principal fica sobrecarregado (503) após as novas tentativas. Opcional.
         self.gemini_fallback_model = env("GEMINI_FALLBACK_MODEL", "")
-        # Esforço de raciocínio do Gemini: low | medium | high | (vazio = padrão do modelo). "low" acelera bastante a extração.
+        # Esforço de raciocínio do Gemini: minimal | low | medium | high | (vazio = padrão do modelo). "low" acelera bastante a extração.
         self.gemini_thinking = env("GEMINI_THINKING", "low")
+        # Nível do modelo reserva (alguns modelos não aceitam "minimal"). Vazio = usa o mesmo de GEMINI_THINKING.
+        self.gemini_thinking_fallback = env("GEMINI_THINKING_FALLBACK", "")
         # Tempo máximo de cada tentativa (s). Passou disso, tenta de novo em vez de ficar esperando uma chamada travada.
         self.gemini_timeout_s = float(env("GEMINI_TIMEOUT_S", "240"))
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")

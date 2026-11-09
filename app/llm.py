@@ -77,7 +77,7 @@ class GeminiProvider(_UsageMixin):
     name = "gemini"
 
     def __init__(self, api_key: str, model: str, client=None, fallback_model: str = "", thinking: str = "",
-                 timeout_s: float = 0) -> None:
+                 timeout_s: float = 0, thinking_fallback: str = "") -> None:
         if client is None:
             from google import genai
             from google.genai import types
@@ -87,18 +87,27 @@ class GeminiProvider(_UsageMixin):
             client = genai.Client(api_key=api_key, http_options=opts)
         self.client, self.model, self.fallback_model = client, model, fallback_model
         self.thinking = (thinking or "").strip().lower()
+        self.thinking_fallback = (thinking_fallback or "").strip().lower()
+        self._nivel: dict[str, str] = {}  # nível efetivo por modelo (rebaixado se o modelo recusar o pedido)
+
+    def _nivel_de(self, model: str) -> str:
+        if model in self._nivel:
+            return self._nivel[model]
+        return self.thinking_fallback if (self.fallback_model and model == self.fallback_model and self.thinking_fallback) else self.thinking
 
     def _thinking_cfg(self, model: str):
-        """Esforço de raciocínio do modelo ('low'/'medium'/'high'; vazio = padrão do modelo). Menos raciocínio = resposta mais rápida."""
-        if self.thinking not in ("low", "medium", "high"):
+        """Esforço de raciocínio do modelo ('minimal'/'low'/'medium'/'high'; vazio = padrão do modelo). Menos raciocínio = resposta mais rápida.
+        O modelo reserva pode ter o seu próprio nível (GEMINI_THINKING_FALLBACK): nem todo modelo aceita 'minimal'."""
+        nivel = self._nivel_de(model)
+        if nivel not in ("minimal", "low", "medium", "high"):
             return None
         from google.genai import types
 
         m = model.lower()
         if "gemini-3" in m:
-            return types.ThinkingConfig(thinking_level=self.thinking)
+            return types.ThinkingConfig(thinking_level=nivel)
         if "2.5" in m:
-            return types.ThinkingConfig(thinking_budget={"low": 1024, "medium": 4096, "high": -1}[self.thinking])
+            return types.ThinkingConfig(thinking_budget={"minimal": 512, "low": 1024, "medium": 4096, "high": -1}[nivel])
         return None
 
     def _call(self, patient: bool = True, **kw):
@@ -114,8 +123,11 @@ class GeminiProvider(_UsageMixin):
         base_cfg = kw.get("config")
         for model in models:
             kw["model"] = model
-            if base_cfg is not None and self.thinking:
-                kw["config"] = base_cfg.model_copy(update={"thinking_config": self._thinking_cfg(model)})
+            if base_cfg is not None:
+                upd = {"thinking_config": self._thinking_cfg(model)}
+                if "gemini-3" in model.lower():
+                    upd["temperature"] = None  # família 3: amostragem fora do pedido (valores não padrão podem dar 400); vale o padrão do modelo
+                kw["config"] = base_cfg.model_copy(update=upd)
             for attempt in range(tentativas):
                 t0 = time.perf_counter()
                 try:
@@ -129,8 +141,9 @@ class GeminiProvider(_UsageMixin):
                     tempos.append({"s": round(time.perf_counter() - t0, 1), "r": _resumo_erro(e)})
                     if "thinking" in str(e).lower() and "INVALID_ARGUMENT" in str(e) and kw.get("config") is not None \
                             and getattr(kw["config"], "thinking_config", None) is not None:
-                        kw["config"] = kw["config"].model_copy(update={"thinking_config": None})  # modelo não aceita: segue sem
-                        base_cfg = kw["config"]; self.thinking = ""
+                        atual = self._nivel_de(model)
+                        self._nivel[model] = "low" if atual == "minimal" else ""  # 'minimal' recusado: tenta 'low'; senão, sem controle
+                        kw["config"] = kw["config"].model_copy(update={"thinking_config": self._thinking_cfg(model)})
                         continue
                     delay = _retry_delay(e)
                     transient = _is_transient(e)
@@ -237,7 +250,8 @@ def get_llm(s: Settings) -> Optional[LLMProvider]:
     p = s.llm_provider
     if p == "gemini" or (p == "auto" and s.gemini_api_key):
         return GeminiProvider(s.gemini_api_key, s.gemini_model, fallback_model=s.gemini_fallback_model,
-                                              thinking=s.gemini_thinking, timeout_s=s.gemini_timeout_s) if s.gemini_api_key else None
+                                              thinking=s.gemini_thinking, timeout_s=s.gemini_timeout_s,
+                                              thinking_fallback=s.gemini_thinking_fallback) if s.gemini_api_key else None
     if p == "anthropic" or (p == "auto" and s.anthropic_api_key):
         return AnthropicProvider(s.anthropic_api_key, s.llm_model, effort=s.llm_effort) if s.anthropic_api_key else None
     return None
