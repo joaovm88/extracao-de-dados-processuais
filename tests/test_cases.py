@@ -245,7 +245,7 @@ def test_gemini_provider_structured_output_and_schema_fallback():
             generate_content=lambda **k: SimpleNamespace(text="não é json")))).extract("s", "u", schema)
 
 
-def test_anthropic_provider_uses_forced_tool():
+def test_anthropic_provider_calls_tool_with_auto_choice_and_effort_only_on_5x():
     from app.llm import AnthropicProvider
 
     seen = {}
@@ -254,8 +254,12 @@ def test_anthropic_provider_uses_forced_tool():
         seen.update(kw)
         return SimpleNamespace(content=[SimpleNamespace(type="tool_use", input={"observacoes": "x"})])
 
-    out = AnthropicProvider("k", "m", SimpleNamespace(messages=SimpleNamespace(create=create))).extract("s", "u", {"type": "object", "properties": {}})
-    assert out == {"observacoes": "x"} and seen["tool_choice"]["name"] == "registrar_extracao"
+    cli = SimpleNamespace(messages=SimpleNamespace(create=create))
+    out = AnthropicProvider("k", "m", cli, effort="low").extract("s", "u", {"type": "object", "properties": {}})
+    assert out == {"observacoes": "x"} and seen["tool_choice"] == {"type": "auto"}  # modelos 5.x recusam tool_choice forçado
+    assert "registrar_extracao" in seen["system"] and "output_config" not in seen  # modelo sem '-5': sem esforço
+    AnthropicProvider("k", "claude-haiku-5-5", cli, effort="low").extract("s", "u", {"type": "object", "properties": {}})
+    assert seen["output_config"] == {"effort": "low"}
 
 
 def test_provider_selection(monkeypatch):

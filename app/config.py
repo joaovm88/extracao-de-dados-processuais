@@ -22,6 +22,8 @@ class Settings:
         self.gemini_timeout_s = float(env("GEMINI_TIMEOUT_S", "240"))
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")
         self.llm_model = env("LLM_MODEL", "claude-sonnet-5-5")
+        # Esforço de raciocínio do Claude (modelos 5.x): low | medium | high | xhigh | max. Menos = mais rápido e barato.
+        self.llm_effort = env("LLM_EFFORT", "low")
         # Texto máximo enviado ao LLM por processo (≈ 4 caracteres por token). Reduza no nível gratuito do Gemini.
         self.context_budget_chars = int(env("CONTEXT_BUDGET_CHARS", "400000"))
         self.ocr_lang = env("OCR_LANG", "por")

@@ -183,19 +183,26 @@ class GeminiProvider(_UsageMixin):
 class AnthropicProvider(_UsageMixin):
     name = "anthropic"
 
-    def __init__(self, api_key: str, model: str, client=None) -> None:
+    def __init__(self, api_key: str, model: str, client=None, effort: str = "") -> None:
         if client is None:
             import anthropic
 
             client = anthropic.Anthropic(api_key=api_key)
         self.client, self.model = client, model
+        self.effort = (effort or "").strip().lower()
+
+    def _effort_kw(self) -> dict:
+        """Esforço de raciocínio (low|medium|high|xhigh|max) só nos modelos da família 5.x, que o aceitam."""
+        if self.effort in ("low", "medium", "high", "xhigh", "max") and "-5" in self.model:
+            return {"output_config": {"effort": self.effort}}
+        return {}
 
     def extract(self, system: str, user: str, schema: dict) -> dict:
+        # tool_choice 'auto' + instrução: os modelos 5.x recusam (400) a escolha forçada de ferramenta
         msg = self.client.messages.create(
-            model=self.model, max_tokens=8000, system=system,
+            model=self.model, max_tokens=8000, system=system + "\n\nPara responder, chame SEMPRE a ferramenta registrar_extracao.",
             tools=[{"name": "registrar_extracao", "description": "Registra os dados extraídos do processo.", "input_schema": schema}],
-            tool_choice={"type": "tool", "name": "registrar_extracao"},
-            messages=[{"role": "user", "content": user}])
+            tool_choice={"type": "auto"}, messages=[{"role": "user", "content": user}], **self._effort_kw())
         u = getattr(msg, "usage", None)
         if u is not None:
             self._set_usage(getattr(u, "input_tokens", None), getattr(u, "output_tokens", None))
@@ -232,5 +239,5 @@ def get_llm(s: Settings) -> Optional[LLMProvider]:
         return GeminiProvider(s.gemini_api_key, s.gemini_model, fallback_model=s.gemini_fallback_model,
                                               thinking=s.gemini_thinking, timeout_s=s.gemini_timeout_s) if s.gemini_api_key else None
     if p == "anthropic" or (p == "auto" and s.anthropic_api_key):
-        return AnthropicProvider(s.anthropic_api_key, s.llm_model) if s.anthropic_api_key else None
+        return AnthropicProvider(s.anthropic_api_key, s.llm_model, effort=s.llm_effort) if s.anthropic_api_key else None
     return None
