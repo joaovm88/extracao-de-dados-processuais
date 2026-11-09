@@ -166,7 +166,7 @@ def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: Searc
     if not case_id:
         return
     for proc in db.list_processes(case_id):
-        if db.pending_docs(case_id, proc["numero"]):
+        if db.pending_docs(case_id, proc["numero"]) or proc.get("manual"):  # feito manualmente: a IA não mexe
             continue
         if proc.get("stale") == 1 and not proc.get("reviewed"):  # processo já revisado só reextrai sob pedido
             extract_process(case_id, proc["numero"], settings, db, store, llm_client)
@@ -174,6 +174,8 @@ def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: Searc
 
 def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataDB, store: SearchStore,
                     llm_client=None) -> None:
+    if (db.get_process(case_id, numero) or {}).get("manual"):
+        return
     if not db.claim_extraction(case_id, numero):
         return
     # nova tentativa: o erro anterior sai de cena e o registro de início/fim recomeça
@@ -212,6 +214,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                                  "extracao_s": round(time.perf_counter() - t_ia, 1),
                                  "chamada": getattr(llm, "last_call", None)}
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
+            result["fields"]["observacoes"] = ex.format_cronologia(result["fields"].get("observacoes"))  # um ato por linha
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
                           revisar=out["_revisar"], modo="llm", provedor=llm.name)
             if usar_eventos:  # confere a cronologia da IA com os eventos reais: data do eproc, ordem e eventos inexistentes

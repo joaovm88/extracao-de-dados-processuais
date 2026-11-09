@@ -13,7 +13,7 @@ from typing import Optional
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
-from .schemas import SHEETS, classify
+from .schemas import SHEETS, classify, manual_text
 
 PENDING = PatternFill("solid", fgColor="FFF3CD")  # linhas ainda não revisadas
 
@@ -137,6 +137,9 @@ def _values(kind: str, proc: dict) -> dict:
     if not vals.get("classe") and proc.get("classe"):
         vals["classe"] = proc["classe"]
     if kind in SHEETS:
+        if proc.get("manual"):  # feito à mão: só a marcação vai para a planilha (nenhum valor da IA)
+            vals["observacoes"] = manual_text(proc)
+            return vals
         fields = res["fields"] if res else {"digitalizado": "NÃO"}
         vals.update({k: v for k, v in fields.items() if v not in (None, "")})
     return vals
@@ -168,6 +171,8 @@ def fill(data: bytes, processes: list[dict]) -> bytes:
 
         if kind in ("bens", "fraude"):  # um item por linha, sempre acrescentado
             for p in processes:
+                if p.get("manual"):
+                    continue
                 res = p.get("result") or {}
                 pend = not p.get("reviewed")
                 for item in res.get("bens" if kind == "bens" else "fraudes", []):

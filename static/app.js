@@ -17,15 +17,20 @@ let panelOpen = innerWidth > 900 ? store.get('painel') !== '0' : false;
 let filtro = {q: '', st: ''};
 // tamanhos ajustáveis (por caso, no navegador): larguras por aba/coluna, alturas por processo e densidade das linhas
 let tam = {larg: {}, alt: {}, dens: 'normal'};
-const defW = k => ({__first: 230, observacoes: 320, corresponsaveis: 380, inscricoes: 220, somatorio: 200}[k] ?? 150);
+const defW = k => ({__first: 300, observacoes: 320, corresponsaveis: 380, inscricoes: 220, somatorio: 200}[k] ?? 150);
 const wOf = (a, k) => tam.larg[a]?.[k] ?? defW(k);
 function loadTam() { try { const t = JSON.parse(store.get('tam:' + caseId) || '{}'); tam = {larg: t.larg || {}, alt: t.alt || {}, dens: t.dens || 'normal'}; } catch (_) { tam = {larg: {}, alt: {}, dens: 'normal'}; } }
 const saveTam = () => store.set('tam:' + caseId, JSON.stringify(tam));
 const LONG = ['observacoes', 'corresponsaveis'];  // colunas de texto longo: abrem numa janela para ler/editar tudo
 const chats = {};  // histórico do assistente por processo (só nesta sessão do navegador)
-const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], aguardando: ['warn', 'aguardando PDFs'], desatualizado: ['warn', 'novas partes'], erro: ['err', 'erro'], sem_pdf: ['', 'sem PDF']};
+const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], aguardando: ['warn', 'aguardando PDFs'], desatualizado: ['warn', 'novas partes'], erro: ['err', 'erro'], sem_pdf: ['', 'sem PDF'], manual: ['blue', 'feito manualmente']};
 const DST = {queued: ['warn', 'na fila'], processing: ['warn', 'processando'], done: ['ok', 'lido'], error: ['err', 'erro']};
 const MODELO = {execucoes_fiscais: 'Execução fiscal', outras_acoes: 'Outras ações', recursos: 'Recursos'};
+async function copiar(txt, msg = 'Copiado') {
+  try { await navigator.clipboard.writeText(txt); }
+  catch (_) { const t = document.createElement('textarea'); t.value = txt; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); } catch (__) { /* sem cópia */ } t.remove(); }
+  toast(msg, 'ok');
+}
 const norm = t => String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 function erroInfo(msg) {
   const [dica, tec] = String(msg || '').split(' Detalhe técnico: ');
@@ -131,7 +136,7 @@ function renderToolbar() {
 function passa(l) {
   if (filtro.st) {
     const ed = editable(l), ok = {revisar: ed && !l.reviewed, revisado: ed && l.reviewed, erro: l.estado === 'erro',
-      andamento: ['extraindo', 'aguardando'].includes(l.estado) || l.docs.some(d => ['queued', 'processing'].includes(d.status)), sem_pdf: l.estado === 'sem_pdf'}[filtro.st];
+      andamento: ['extraindo', 'aguardando'].includes(l.estado) || l.docs.some(d => ['queued', 'processing'].includes(d.status)), sem_pdf: l.estado === 'sem_pdf', manual: l.estado === 'manual'}[filtro.st];
     if (!ok) return false;
   }
   const termos = norm(filtro.q).split(/\s+/).filter(Boolean); if (!termos.length) return true;
@@ -143,6 +148,12 @@ function updateFilterUI(shown, total) {
 }
 $('f-q').oninput = e => { filtro.q = e.target.value; if (data) renderGrid(); };
 $('f-st').onchange = e => { filtro.st = e.target.value; if (data) renderGrid(); };
+$('f-copy').onclick = () => {
+  if (!data) return;
+  const nums = (aba === 'bens' ? data.bens : aba === 'fraude' ? data.fraudes : data.linhas.filter(l => l.aba === aba).filter(passa)).map(x => x.numero);
+  const unicos = [...new Set(nums)]; if (!unicos.length) return toast('Nenhum processo para copiar', 'err');
+  copiar(unicos.join('\n'), `${unicos.length} número(s) copiado(s), um por linha`);
+};
 $('f-clear').onclick = () => { filtro = {q: '', st: ''}; $('f-q').value = ''; $('f-st').value = ''; renderGrid(); $('f-q').focus(); };
 document.addEventListener('keydown', e => { if (e.key === '/' && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) && !document.querySelector('dialog[open]') && caseId) { e.preventDefault(); $('f-q').focus(); } });
 
@@ -160,11 +171,12 @@ function renderGrid() {
   if (aba === 'bens' || aba === 'fraude') {
     const todos = aba === 'bens' ? data.bens : data.fraudes, items = todos.filter(passaItem); updateFilterUI(items.length, todos.length);
     table.innerHTML = gridHead(['__first', ...a.colunas.map(c => c.key)], [{text: 'Processo'}, ...a.colunas.map(c => ({text: c.titulo}))]) + `<tbody>${items.map(i =>
-      `<tr><td class="first"><div class="cc"><span class="num">${esc(i.numero)}</span></div></td>${a.colunas.map(c => `<td class="c ro"><div class="cc">${esc(i[c.key] ?? '')}</div></td>`).join('')}</tr>`).join('')}</tbody>`;
+      `<tr><td class="first"><div class="cc"><div class="numrow"><span class="idx">${items.indexOf(i) + 1}</span><span class="num">${esc(i.numero)}</span><button type="button" class="copy" data-copy="${esc(i.numero)}" title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button></div></div></td>${a.colunas.map(c => `<td class="c ro"><div class="cc">${esc(i[c.key] ?? '')}</div></td>`).join('')}</tr>`).join('')}</tbody>`;
     if (!items.length) emptyGrid(todos.length ? 'Nenhum item corresponde ao filtro' : aba === 'bens' ? 'Nenhum bem extraído ainda' : 'Nenhuma alegação de fraude', todos.length ? 'Ajuste ou limpe o filtro acima.' : 'Os itens aparecem aqui quando a IA os encontra nos processos. Esta aba é somente leitura.');
     return;
   }
   updateFilterUI(linhas.length, todas.length);
+  const pos = new Map(todas.map((l, i) => [l.numero, i + 1]));  // nº de ordem do processo na aba (não muda ao filtrar)
   const cols = a.colunas.filter(c => c.key !== 'numero');
   table.innerHTML = gridHead(['__first', ...cols.map(c => c.key)], [{text: 'Processo'}, ...cols.map(c => ({text: c.titulo, title: c.titulo}))]) + `<tbody>${linhas.map(l => {
     const [cls, txt] = ESTADO[l.estado], ed = editable(l), waiting = ['extraindo', 'aguardando'].includes(l.estado);
@@ -172,7 +184,7 @@ function renderGrid() {
     const cut = l.medidas?.contexto?.cortado ? `<span class="tag warn" title="A IA viu ${l.medidas.contexto.paginas_enviadas} de ${l.medidas.contexto.paginas_total} páginas (limite de contexto)">cortado</span>` : '';
     const warn = l.citacoes_invalidas.length ? `<span class="tag err" title="Citações que não existem no PDF: ${esc(l.citacoes_invalidas.join('; '))}">⚠ citação</span>` : '';
     const h = tam.alt[l.numero];
-    return `<tr data-n="${esc(l.numero)}" class="${rc}"${h ? ` style="--rh:${h}px"` : ''}><td class="first"><div class="cc"><span class="num">${esc(l.numero)}</span>
+    return `<tr data-n="${esc(l.numero)}" class="${rc}"${h ? ` style="--rh:${h}px"` : ''}><td class="first"><div class="cc"><div class="numrow"><span class="idx" title="Nº de ordem nesta aba">${pos.get(l.numero)}</span><span class="num">${esc(l.numero)}</span><button type="button" class="copy" data-copy="${esc(l.numero)}" title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button></div>
       <div class="sub"><span class="tag ${cls}">${txt}</span>${cut}${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> <span>revisado</span></label>` : ''}</div></div>
       <span class="rzr" title="Arraste para ajustar a altura da linha · duplo clique restaura"></span></td>
       ${cols.map(c => cell(l, c, ed, waiting)).join('')}</tr>`;
@@ -180,14 +192,23 @@ function renderGrid() {
   if (!linhas.length) emptyGrid(todas.length ? 'Nenhum processo corresponde ao filtro' : 'Nenhum processo nesta aba', todas.length ? 'Ajuste ou limpe o filtro acima.' : 'Importe a planilha-modelo e envie PDFs (botão "Upload de Processo" no topo, ou arraste os arquivos para cá).');
 }
 function emptyGrid(t, p) { const g = $('grid-empty'); g.hidden = false; g.innerHTML = `<b>${esc(t)}</b>${esc(p)}`; }
+function ato(linha) {  // '<origem> - dd/mm/aaaa - descrição' -> data em negrito, origem discreta
+  const m = String(linha).match(/^(.+?)\s+-\s+(\d{2}\/\d{2}\/\d{4}|data não informada)\s+-\s+(.+)$/);
+  return m ? `<div class="li"><b>${esc(m[2])}</b> ${esc(m[3])} <span class="ori">${esc(m[1])}</span></div>` : `<div class="li">${esc(linha)}</div>`;
+}
 function cell(l, c, ed, waiting) {
   const v = l.valores[c.key] ?? '', tip = l.citacoes[c.key] ? ` title="Origem: ${esc(l.citacoes[c.key])}"` : '';
   const W = (inner, cls = '') => `<td${cls ? ` class="${cls}"` : ''}${tip}><div class="cc">${inner}</div></td>`;
   if (c.fonte !== 'ai') return W(esc(v), 'c ro');  // capa (Mcfly) e campos do sistema: somente leitura
+  if (l.estado === 'manual') return W(c.key === 'observacoes' && v ? `<div class="manual-nota">${esc(v)}</div>` : '<div class="wait">—</div>');
   if (!ed) return W(waiting ? '<div class="shim"></div>' : '<div class="wait">—</div>');
   if (c.key === 'corresponsaveis') {  // lista: uma pessoa por linha, com CPF/CNPJ; o resto fica na janela
     const ls = String(v).split('\n').filter(Boolean);
     return W(`<div class="clamp lista" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar a lista inteira">${ls.slice(0, 3).map(x => `<div class="li">${esc(x)}</div>`).join('')}${ls.length > 3 ? `<div class="mais">+${ls.length - 3} na lista…</div>` : ''}</div>`);
+  }
+  if (c.key === 'observacoes' && String(v).includes('\n')) {  // cronologia: um ato por linha, com a data em destaque
+    const ls = String(v).split('\n').filter(Boolean), max = tam.dens === 'compacto' ? 2 : tam.dens === 'amplo' ? 10 : 5;
+    return W(`<div class="clamp lista atos" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar a lista inteira">${ls.slice(0, max).map(ato).join('')}${ls.length > max ? `<div class="mais">+${ls.length - max} ato(s) na lista…</div>` : ''}</div>`);
   }
   if (LONG.includes(c.key)) return W(`<div class="clamp" data-long="${c.key}" tabindex="0" role="button" title="Clique para ler e editar tudo">${esc(v)}</div>`);
   if (c.opcoes) return W(`<select data-k="${c.key}"><option value=""></option>${c.opcoes.map(o => `<option ${o === v ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`);
@@ -249,6 +270,7 @@ $('grid').addEventListener('keydown', e => {
 });
 $('grid').addEventListener('click', e => {
   if (e.target.closest('.rz,.rzr')) return;
+  const cp = e.target.closest('[data-copy]'); if (cp) { e.stopPropagation(); return copiar(cp.dataset.copy, 'Número copiado'); }
   const tr = e.target.closest('tbody tr'); if (!tr || !tr.dataset.n) return;
   const lg = e.target.closest('[data-long]'); if (lg) openLong(tr.dataset.n, lg.dataset.long);
   if (e.target.closest('input[type=checkbox],label')) return;
@@ -267,10 +289,10 @@ function openLong(numero, key) {
   const corte = key !== 'observacoes' || !c?.cortado ? '' : c.modo === 'eventos' ? `⚠ ${c.atos_relevantes_omitidos} ato(s) relevante(s) ficaram sem o texto integral por falta de espaço: a cronologia pode estar incompleta. `
     : `⚠ A IA viu ${c.paginas_enviadas} de ${c.paginas_total} páginas deste processo: a cronologia pode estar incompleta. `;
   const conf = key === 'observacoes' && cr ? `Cronologia conferida com os ${cr.eventos_base} ${l.sistema === 'pje' ? 'documentos do índice do PJe' : 'eventos do eproc'}${cr.datas_corrigidas ? `: ${cr.datas_corrigidas} data(s) corrigida(s) pelo sistema` : ''}${cr.inexistentes.length ? `; ⚠ ato(s) que não existem: ${cr.inexistentes.join(', ')}` : ''}. ` : '';
-  $('notes-cit').textContent = corte + conf + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = key !== 'corresponsaveis'; $('dlg-notes').showModal(); $('notes-text').focus();
+  $('notes-cit').textContent = corte + conf + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = !['corresponsaveis', 'observacoes'].includes(key); $('dlg-notes').showModal(); $('notes-text').focus();
 }
 $('notes-fmt').onclick = async () => {
-  try { const r = await api('/api/format/corresponsaveis', json('POST', {texto: $('notes-text').value})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }
+  try { const r = await api(`/api/format/${longFor.key}`, json('POST', {texto: $('notes-text').value})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }
 };
 $('notes-save').onclick = async () => { const f = longFor; await save(f.numero, f.key, $('notes-text').value, null); $('dlg-notes').close(); };
 
@@ -293,25 +315,38 @@ function renderAssistInfo() {
   const pdfs = l.docs.map(d => { const [dc, dt] = DST[d.status] || ['', d.status];
     return `<div class="pdf"><span class="nm" title="${esc(d.filename)}">${esc(d.filename)}</span><span class="tag ${dc}">${dt}</span>
       ${d.started_at ? `<div class="muted pdf-h">${d.status === 'error' ? 'Falhou' : 'Lido'}: ${dh(d.started_at)} → ${dh(d.finished_at)}${d.finished_at ? ` (${fmtT(d.finished_at - d.started_at)})` : ''}</div>` : ''}${d.error ? `<div class="er" title="${esc(d.error)}">${esc(String(d.error).slice(0, 160))}${String(d.error).length > 160 ? '…' : ''}</div>` : ''}<button class="icon-btn" data-retry="${d.id}" title="Reprocessar este PDF" aria-label="Reprocessar">⟳</button><button class="icon-btn" data-del="${d.id}" title="Excluir este PDF" aria-label="Excluir">🗑</button></div>`; }).join('');
-  $('assist-info').innerHTML = `<div class="info-top"><span class="num">${esc(l.numero)}</span><span class="tag ${cls}">${txt}</span>
+  const manualCard = l.manual?.ativo ? `<div class="alert info"><b>Feito manualmente.</b> ${l.manual.nota ? esc(l.manual.nota) : 'Sem observação.'}<br>A IA não mexe neste processo e a planilha registra isso nas observações.<br><button class="btn sm" data-manual-off>Desfazer marcação</button></div>` : '';
+  $('assist-info').innerHTML = `<div class="info-top"><span class="num">${esc(l.numero)}</span><button type="button" class="copy on" data-copy-num title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button><span class="tag ${cls}">${txt}</span>
       ${ed ? `<span class="tag ${l.reviewed ? 'ok' : 'blue'}">${l.reviewed ? 'revisado' : 'a revisar'}</span>` : ''}
       ${l.modelo ? `<span class="chip">${esc(MODELO[l.modelo] || l.modelo)}</span>` : ''}${l.sistema ? `<span class="chip">${esc(l.sistema)}</span>` : ''}${l.paginas ? `<span class="chip">${l.paginas} págs.</span>` : ''}${l.medidas ? `<span class="chip" title="Páginas enviadas à IA e tokens da extração">IA viu ${l.medidas.contexto.paginas_enviadas}/${l.medidas.contexto.paginas_total} págs. · ${fmtN(l.medidas.tokens?.entrada)} tokens</span>` : ''}</div>
-    ${l.error && !['extraindo', 'aguardando'].includes(l.estado) ? cardErro(l) : ''}
+    ${manualCard}
+    ${l.error && !['extraindo', 'aguardando'].includes(l.estado) && !l.manual?.ativo ? cardErro(l) : ''}
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
     <div class="acts">${ed ? `<button class="btn sm primary" data-toggle-rev>${l.reviewed ? '↺ Marcar como a revisar' : '✓ Marcar como revisado'}</button>` : ''}
       ${l.n_eventos ? `<button class="btn sm" data-eventos title="Todos os eventos lidos do PDF, sem IA">📅 Eventos (${l.n_eventos})</button>` : ''}
-      ${l.docs.length ? `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>` : ''}</div>
+      ${!l.manual?.ativo ? '<button class="btn sm" data-manual-on title="Registra que este processo foi feito à mão: a IA não o extrai e a planilha mostra isso nas observações">✍ Feito manualmente</button>' : ''}
+      ${l.docs.length && !l.manual?.ativo ? `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>` : ''}</div>
     <details class="pdfs" ${l.docs.some(d => d.status === 'error') ? 'open' : ''}><summary>PDFs deste processo (${l.docs.length})</summary>${pdfs || '<p class="muted">Nenhum PDF enviado para este processo.</p>'}</details>`;
   const q = (s) => $('assist-info').querySelector(s);
   q('[data-again]') && (q('[data-again]').onclick = () => reextract(l.numero, false));
   q('[data-copy-err]') && (q('[data-copy-err]').onclick = async () => { try { await navigator.clipboard.writeText(`${l.numero}\n${l.error}`); toast('Copiado', 'ok'); } catch (_) { toast('Não foi possível copiar', 'err'); } });
+  q('[data-copy-num]') && (q('[data-copy-num]').onclick = () => copiar(l.numero, 'Número copiado'));
+  q('[data-manual-on]') && (q('[data-manual-on]').onclick = () => setManual(l.numero, true));
+  q('[data-manual-off]') && (q('[data-manual-off]').onclick = () => setManual(l.numero, false));
   q('[data-reextract]') && (q('[data-reextract]').onclick = () => reextract(l.numero, true));
   q('[data-eventos]') && (q('[data-eventos]').onclick = () => openEventos(l.numero));
   q('[data-toggle-rev]') && (q('[data-toggle-rev]').onclick = () => setReviewed(l.numero, !l.reviewed));
   $('assist-info').querySelectorAll('[data-del]').forEach(b => b.onclick = () => delDoc(b.dataset.del));
   $('assist-info').querySelectorAll('[data-retry]').forEach(b => b.onclick = () => retryDoc(b.dataset.retry));
   $('q').disabled = !l.docs.some(d => d.status === 'done'); $('q').placeholder = $('q').disabled ? 'Envie e aguarde a leitura do PDF para perguntar' : 'Pergunte sobre este processo…';
+}
+async function setManual(numero, ativo) {
+  let nota = null;
+  if (ativo) { nota = prompt('Marcar como feito manualmente.\nObservação (opcional), por exemplo: "Concluído no SAJ em 05/11":', ''); if (nota === null) return; }
+  else if (!confirm('Desfazer a marcação? Se houver PDFs enviados, a IA volta a extrair este processo.')) return;
+  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/manual`, json('PUT', {manual: ativo, nota})); toast(ativo ? 'Marcado como feito manualmente' : 'Marcação desfeita', 'ok'); refresh(true); }
+  catch (e) { toast(e.message, 'err'); }
 }
 async function reextract(numero, ask) {
   if (ask && !confirm('Refazer a extração com todas as partes? As suas edições neste processo serão descartadas.')) return;
@@ -392,9 +427,9 @@ function renderMed() {
   const barra = (partes, total) => `<div class="mbar">${partes.filter(x => x[0] > 0).map(([v, cor, t]) => `<i style="width:${Math.max(v / (total || 1) * 100, 1.5)}%;background:var(--${cor})" title="${esc(t)}"></i>`).join('')}</div>`;
   const leg = partes => `<div class="mleg">${partes.map(([v, cor, t]) => `<span><i style="background:var(--${cor})"></i>${esc(t)} <b>${v}</b></span>`).join('')}</div>`;
   const iaS = sum(com, l => l.medidas.extracao_s), leS = sum(docs, t => t.total_s), medIa = com.length ? iaS / com.length : 0;
-  const comPdf = ls.length, semExt = Math.max(comPdf - com.length, 0), inteiros = com.length - cortados.length;
+  const manuais = ls.filter(l => l.estado === 'manual').length, comPdf = ls.length, semExt = Math.max(comPdf - com.length, 0), inteiros = com.length - cortados.length;
   const pdfP = [[st('done'), 'ok', 'lidos'], [st('processing'), 'blue', 'lendo'], [st('queued'), 'muted', 'na fila'], [st('error'), 'err', 'com erro']];
-  const procP = [[inteiros, 'ok', 'IA viu tudo'], [cortados.length, 'warn', 'cortados'], [semExt, 'muted', 'sem extração']];
+  const procP = [[inteiros, 'ok', 'IA viu tudo'], [cortados.length, 'warn', 'cortados'], [Math.max(semExt - manuais, 0), 'muted', 'sem extração'], [manuais, 'blue', 'feitos manualmente']];
   const tmpP = [[Math.round(leS), 'blue', 'leitura dos PDFs (' + fmtT(leS) + ')'], [Math.round(iaS), 'warn', 'IA (' + fmtT(iaS) + ')']];
   const tokP = [[tin, 'blue', 'entrada'], [tout, 'warn', 'saída']];
   const porDia = medIa ? Math.floor(8 * 3600 / (medIa + (docs.length ? leS / docs.length : 0))) : null;
@@ -427,7 +462,7 @@ function renderMed() {
       <td>${tk ? `${fmtN(tk.entrada)} / ${fmtN(tk.saida)}${tk.raciocinio ? `<div class="muted">+ ${fmtN(tk.raciocinio)} de raciocínio</div>` : ''}` : '—'}</td><td>${m ? `${fmtT(m.extracao_s)}${m.chamada ? `<div class="muted" title="Modelo que respondeu: ${esc(m.chamada.modelo)}${m.chamada.tempos?.length ? ` · tentativas: ${m.chamada.tempos.map(t => `${Math.round(t.s)} s (${t.r})`).join(', ')}` : ''}">${m.chamada.tentativas} tentativa(s)${m.chamada.espera_s ? ` · ${fmtT(m.chamada.espera_s)} de espera` : ''}</div>` : ''}` : '—'}</td>
       <td>${d.length ? `${fmtT(sum(d, t => t.total_s))}<div class="muted">OCR: ${sum(d, t => t.ocr_paginas)} pág. em ${fmtT(sum(d, t => t.ocr_s))}</div>` : '—'}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nenhum processo com PDF enviado ainda.</td></tr>';
 }
-$('btn-med').onclick = () => { renderMed(); $('dlg-med').showModal(); };
+$('btn-med').onclick = () => { renderMed(); $('med-pdf').href = `/api/cases/${caseId}/medicoes.pdf?tz=${new Date().getTimezoneOffset()}`; $('dlg-med').showModal(); };
 
 /* ---------- janelas: upload, modelo, PDFs ---------- */
 function renderPicked() {

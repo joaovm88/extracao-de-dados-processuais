@@ -5,7 +5,7 @@ from typing import Optional
 from openpyxl import load_workbook
 
 from . import template as tpl
-from .schemas import SHEETS, classify
+from .schemas import SHEETS, classify, manual_text
 
 ABAS = [("execucoes_fiscais", "Execuções Fiscais"), ("outras_acoes", "Outras Ações"), ("embargos", "Embargos"),
         ("bens", "Outros Bens"), ("fraude", "Fraudes")]
@@ -57,19 +57,24 @@ def build(processes: list[dict], docs: list[dict], template_bytes: Optional[byte
         valores = {**m, "numero": p["numero"]}
         if not valores.get("classe") and p.get("classe"):
             valores["classe"] = p["classe"]
-        valores.update(res.get("fields") or {})
+        manual = bool(p.get("manual"))
+        if manual:  # feito à mão: a planilha mostra só a marcação (o texto da IA, se houver, fica guardado e volta ao desfazer)
+            valores["observacoes"] = manual_text(p)
+        else:
+            valores.update(res.get("fields") or {})
         aba = res.get("sheet") or classify(m.get("classe") or p.get("classe") or "")[0]
         linhas.append({
             "numero": p["numero"], "aba": aba, "estado": estado(p), "reviewed": bool(p.get("reviewed")), "error": p.get("error"),
-            "valores": valores, "citacoes": res.get("citacoes") or {}, "citacoes_invalidas": res.get("citacoes_invalidas") or [],
+            "valores": valores, "citacoes": {} if manual else res.get("citacoes") or {}, "citacoes_invalidas": [] if manual else res.get("citacoes_invalidas") or [],
             "sistema": res.get("sistema"), "modelo": res.get("prompt"), "paginas": res.get("paginas"), "modo": res.get("modo"),
             "medidas": res.get("medidas"), "cronologia": res.get("cronologia"),
+            "manual": {"ativo": bool(p.get("manual")), "nota": p.get("manual_note"), "em": p.get("manual_at")},
             "ext": {"inicio": p.get("ext_started_at"), "fim": p.get("ext_finished_at"), "status": p.get("ext_status")},
             "n_eventos": sum((d.get("metadata") or {}).get("n_eventos") or 0 for d in by_num.get(p["numero"], [])),
             "docs": [{**{k: d.get(k) for k in ("id", "filename", "status", "pages_done", "pages_total", "pages_ocr", "error", "started_at", "finished_at")},
                       "tempos": (d.get("metadata") or {}).get("tempos")} for d in by_num.get(p["numero"], [])]})
-        bens += [{"numero": p["numero"], **b} for b in res.get("bens", [])]
-        fraudes += [{"numero": p["numero"], **f} for f in res.get("fraudes", [])]
+        bens += [] if manual else [{"numero": p["numero"], **b} for b in res.get("bens", [])]
+        fraudes += [] if manual else [{"numero": p["numero"], **f} for f in res.get("fraudes", [])]
     for a in abas:
         a["n"] = len(bens) if a["key"] == "bens" else len(fraudes) if a["key"] == "fraude" else sum(1 for l in linhas if l["aba"] == a["key"])
     return {"abas": abas, "linhas": linhas, "bens": bens, "fraudes": fraudes,

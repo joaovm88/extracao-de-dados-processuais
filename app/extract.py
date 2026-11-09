@@ -282,6 +282,44 @@ def _fmt_doc(d: str) -> tuple[str, str, bool]:
     return "CPF", m, valid_cpf(m)
 
 
+_BULLET_LISTA = re.compile(r"^\s*(?:[-•*·–—]+|\d{1,3}[.)])\s+")
+_ATO = re.compile(
+    r"(?:Evento\s+\d+|ID\s+\d{6,}|VOL\s+\d+)(?:\s*,\s*(?:VOL\s+\d+|pg\.\s*\d+|ID\s+\d+|Evento\s+\d+))*"
+    r"\s*[-–—]\s*(?:\d{2}/\d{2}/\d{4}|data não informada)\s*[-–—]\s*", re.IGNORECASE)
+
+
+def format_cronologia(value) -> Optional[str]:
+    """Deixa a cronologia como lista: um ato por linha, '<origem> - dd/mm/aaaa - descrição'. Separa atos colados na mesma
+    linha, tira marcadores/numeração e traços diferentes, e junta continuações de frase. Texto que não é lista (ex.: 'Não
+    informado no extrato', resposta do assistente) fica como está."""
+    if value is None:
+        return None
+    texto = str(value).replace("\r", "")
+    if not _ATO.search(texto):
+        return texto.strip() or None
+    atual: list[str] = []
+    for linha in texto.split("\n"):
+        linha = _BULLET_LISTA.sub("", linha).strip()
+        if not linha:
+            continue
+        marcas = [m.start() for m in _ATO.finditer(linha)]
+        if not marcas:
+            if atual and not linha.startswith("["):  # continuação do ato anterior (frase quebrada em duas linhas)
+                atual[-1] += " " + linha
+            else:
+                atual.append(linha)
+            continue
+        if marcas[0] > 0:  # texto antes do primeiro ato (ex.: um título)
+            atual.append(linha[:marcas[0]].strip())
+        for ini, fim in zip(marcas, marcas[1:] + [len(linha)]):
+            atual.append(linha[ini:fim].strip())
+    out = []
+    for l in atual:
+        l = re.sub(r"\s*[–—]\s*", " - ", l) if _ATO.match(l) else l
+        out.append(re.sub(r"\s+", " ", l).strip().rstrip(";"))
+    return "\n".join(x for x in out if x)
+
+
 def format_corresponsaveis(value) -> Optional[str]:
     """Padroniza a lista de corresponsáveis: uma pessoa/empresa por linha, 'NOME - CPF: …' ou 'NOME - CNPJ: …'.
     Aceita texto corrido, linhas com marcadores/numeração, ';' como separador, documento só com números ou lista JSON.

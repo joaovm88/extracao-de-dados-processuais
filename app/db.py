@@ -13,7 +13,9 @@ _JSON_COLS = ("metadata", "result", "mcfly")
 _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEGER DEFAULT 0", "classe": "TEXT",
               "sheet": "TEXT", "tipo": "TEXT", "sistema": "TEXT", "error": "TEXT",
               # registro da última extração por IA: início/fim (epoch) e resultado ('rodando' | 'ok' | 'erro')
-              "ext_started_at": "REAL", "ext_finished_at": "REAL", "ext_status": "TEXT"}
+              "ext_started_at": "REAL", "ext_finished_at": "REAL", "ext_status": "TEXT",
+              # processo feito à mão pelo analista: a IA não mexe nele e a planilha registra isso
+              "manual": "INTEGER DEFAULT 0", "manual_note": "TEXT", "manual_at": "REAL"}
 
 
 # Colunas de documents adicionadas ao longo das versões: bancos antigos (volume do Docker) são migrados na abertura.

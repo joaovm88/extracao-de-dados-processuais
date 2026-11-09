@@ -111,3 +111,10 @@ Modo simples para um computador sem Docker: fila e busca em memória, tudo num s
 4. Botão direito em `run_local.py` > **Run 'run_local'**. Abra `http://localhost:8000`.
 
 Limites: um worker só; o índice de busca em memória se perde ao reiniciar (o chat e os processos muito grandes precisam que os PDFs sejam reprocessados); o programa precisa ficar aberto. O servidor escuta só em `127.0.0.1`.
+
+## Planilha viva: numeração, copiar número, feito manualmente, Medições em PDF
+
+- **Numeração:** cada processo tem um nº de ordem na aba (não muda ao filtrar). **⧉** ao lado do número copia o número do processo; **⧉ Copiar números** (na barra de filtros) copia todos os mostrados, um por linha.
+- **Feito manualmente:** no painel do processo, *✍ Feito manualmente* (com observação opcional). A IA deixa de extrair o processo, a linha ganha a etiqueta e a planilha exportada registra "Processo analisado manualmente" nas observações (nenhum valor da IA é escrito). *Desfazer marcação* devolve o processo ao fluxo normal. Filtro: *Feitos manualmente*.
+- **Cronologia como lista:** o campo de observações mostra um ato por linha (data em destaque e origem discreta). *Padronizar lista* (na janela do campo) separa atos colados na mesma linha. Os três prompts (execução fiscal, outras ações e recursos) pedem só a cronologia `[ORIGEM] - [dd/mm/aaaa] - [ato]`.
+- **Medições:** *Baixar relatório (PDF)* gera um PDF com os indicadores, as barras, a tabela por processo e o registro de execução.

@@ -42,6 +42,11 @@ class TextIn(BaseModel):
     texto: str
 
 
+class ManualIn(BaseModel):
+    manual: bool
+    nota: Optional[str] = None
+
+
 class CaseIn(BaseModel):
     nome: str
 
@@ -120,6 +125,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                 "raciocinio": s.gemini_thinking if llm and llm.name == "gemini" else s.llm_effort if llm else None,
                 "contexto_chars": s.context_budget_chars}
 
+    @app.post("/api/format/observacoes")
+    def format_observacoes(body: TextIn):
+        """Deixa a cronologia como lista (um ato por linha), sem gastar IA."""
+        from .extract import format_cronologia
+
+        return {"texto": format_cronologia(body.texto) or ""}
+
     @app.post("/api/format/corresponsaveis")
     def format_corresponsaveis(body: TextIn):
         """Padroniza uma lista de corresponsáveis (uma pessoa/empresa por linha, com CPF/CNPJ), sem gastar IA."""
@@ -170,6 +182,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         return c
 
     def _estado(p: dict) -> str:
+        if p.get("manual"):  # feito manualmente: vale mais que qualquer outro estado
+            return "manual"
         if p.get("stale") == 2:  # em andamento ou à espera de nova tentativa: vale mais que um erro antigo
             return "extraindo"
         if p.get("stale") == 1:
@@ -196,6 +210,18 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         _case(cid)
         tp = _tpl_path(cid)
         return view.build(db.list_processes(cid), db.list(cid), tp.read_bytes() if tp.exists() else None, _estado)
+
+    @app.get("/api/cases/{cid}/medicoes.pdf")
+    def medicoes_pdf(cid: str, tz: int = 180):
+        """Relatório em PDF das medições (tokens, tempos, cortes e registro de execução). `tz`: fuso do navegador (minutos)."""
+        from .report import gerar_pdf
+
+        c = _case(cid)
+        tp = _tpl_path(cid)
+        data = view.build(db.list_processes(cid), db.list(cid), tp.read_bytes() if tp.exists() else None, _estado)
+        pdf = gerar_pdf(c["nome"], data["linhas"], data["documentos"], tz)
+        nome = f'Medicoes - {c["nome"]}.pdf'.encode("latin-1", "replace").decode("latin-1").replace('"', "")
+        return Response(pdf, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{nome}"'})
 
     @app.get("/api/cases/{cid}/processes/{numero}/eventos")
     def process_events(cid: str, numero: str):
@@ -244,11 +270,30 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         db.update_process(cid, numero, result=res, reviewed=int(body.reviewed))
         return {"ok": True}
 
+    @app.put("/api/cases/{cid}/processes/{numero}/manual")
+    def set_manual(cid: str, numero: str, body: ManualIn):
+        """Marca (ou desmarca) o processo como feito manualmente: a IA deixa de extraí-lo e a planilha registra isso."""
+        p = db.get_process(cid, numero)
+        if not p:
+            raise HTTPException(404, "Processo não encontrado.")
+        if body.manual:
+            db.update_process(cid, numero, manual=1, manual_note=(body.nota or "").strip() or None, manual_at=time.time(),
+                              error=None, stale=0)
+        else:
+            db.update_process(cid, numero, manual=0, manual_note=None, manual_at=None)
+            if db.docs_for_process(cid, numero) and not p.get("result"):  # volta ao fluxo normal: extrai o que já foi enviado
+                db.mark_stale(cid, numero)
+                queue.enqueue(f"{READY_PREFIX}{cid}")
+        return {"ok": True, "manual": body.manual}
+
     @app.post("/api/cases/{cid}/processes/{numero}/reextract", status_code=202)
     def reextract(cid: str, numero: str):
         """Refaz a extração juntando todas as partes (descarta edições da revisão)."""
-        if not db.get_process(cid, numero):
+        p0 = db.get_process(cid, numero)
+        if not p0:
             raise HTTPException(404, "Processo não encontrado.")
+        if p0.get("manual"):
+            raise HTTPException(409, "Este processo está marcado como feito manualmente. Desfaça a marcação para extrair com a IA.")
         db.update_process(cid, numero, reviewed=0, error=None)  # o erro antigo não fica na tela enquanto refaz
         db.mark_stale(cid, numero)
         queue.enqueue(f"{EXTRACT_PREFIX}{cid}|{numero}")

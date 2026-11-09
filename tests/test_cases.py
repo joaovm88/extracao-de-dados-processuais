@@ -318,11 +318,11 @@ def test_eproc_cites_evento_never_id_and_inherits_across_pages(env):
 
 
 @pytest.mark.parametrize("tipo,sheet,prompt,titulo", [
-    ("apelacao", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
-    ("agravo", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
-    ("embargos", "embargos", "outras_acoes", "Relatório de Status Processual"),
+    ("apelacao", "outras_acoes", "recursos", "Cronologia da Tramitação Recursal"),
+    ("agravo", "outras_acoes", "recursos", "Cronologia da Tramitação Recursal"),
+    ("embargos", "embargos", "outras_acoes", "Cronologia dos Atos Processuais"),
     ("execucao_fiscal", "execucoes_fiscais", "execucoes_fiscais", "Cronologia dos Atos Processuais"),
-    ("outras_acoes", "outras_acoes", "outras_acoes", "Relatório de Status Processual"),
+    ("outras_acoes", "outras_acoes", "outras_acoes", "Cronologia dos Atos Processuais"),
 ])
 def test_tipo_chosen_in_upload_selects_sheet_and_prompt(env, tipo, sheet, prompt, titulo):
     c, llm, tmp = env
@@ -925,3 +925,72 @@ def test_load_dotenv_reads_values_without_overriding(tmp_path, monkeypatch):
     import os
     assert (os.environ["A_X"], os.environ["B_X"], os.environ["C_X"], os.environ["JA_TEM"]) == ("um", "dois três", "quatro", "original")
     assert load_dotenv(tmp_path / "nao-existe") == 0
+
+
+@pytest.mark.parametrize("nome", ["outras_acoes", "recursos"])
+def test_other_prompts_are_chronology_only_like_the_execution_prompt(nome):
+    texto = ex.load_prompt(nome)
+    for velho in ("Resumo da Origem", "Status Atual (Último Parágrafo)", "Resumo do Recurso", "Pedidos da Parte Recorrente", "1. ", "2. ", "3. "):
+        assert velho not in texto  # sem blocos de resumo numerados
+    assert "ordem cronológica crescente" in texto and "[ORIGEM] - [dd/mm/aaaa]" in texto
+    assert "Não informado no extrato" in texto and "mero expediente" in texto and "Eu fornecerei" in texto
+
+
+def test_format_cronologia_one_act_per_line():
+    t = "- Evento 1, pg. 1 – 12/03/2012 – Ajuizada. Evento 5, pg. 2 - 20/04/2012 - Citação;\n2. Evento 9 - 01/01/2013 - Sentença que\njulga procedente."
+    assert ex.format_cronologia(t).split("\n") == [
+        "Evento 1, pg. 1 - 12/03/2012 - Ajuizada.", "Evento 5, pg. 2 - 20/04/2012 - Citação",
+        "Evento 9 - 01/01/2013 - Sentença que julga procedente."]
+    assert ex.format_cronologia("Não informado no extrato") == "Não informado no extrato" and ex.format_cronologia(None) is None
+
+
+def test_manual_flag_blocks_ai_writes_note_in_sheet_and_export(env):
+    c, llm, tmp = env
+    cid = c.post("/api/cases", json={"nome": "M"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    n_chamadas = len(llm.calls)
+    r = c.put(f"/api/cases/{cid}/processes/{NUM}/manual", json={"manual": True, "nota": "Feito no SAJ por mim"})
+    assert r.status_code == 200
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    lin = next(x for x in sheet["linhas"] if x["numero"] == NUM)
+    assert lin["estado"] == "manual" and lin["manual"]["ativo"] and lin["manual"]["nota"] == "Feito no SAJ por mim"
+    assert c.post(f"/api/cases/{cid}/processes/{NUM}/reextract").status_code == 409  # a IA não refaz
+    assert len(llm.calls) == n_chamadas
+    # feito à mão: a planilha mostra só a marcação (sem valores da IA); o resultado da IA fica guardado
+    assert lin["valores"]["observacoes"] == "Processo analisado manualmente. Feito no SAJ por mim" and not lin["citacoes"]
+    p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+    assert p["manual"] == 1 and p["result"]
+    r = c.put(f"/api/cases/{cid}/processes/{NUM}/manual", json={"manual": False})
+    assert r.status_code == 200 and c.get(f"/api/cases/{cid}/processes/{NUM}").json()["manual"] == 0
+    volta = next(x for x in c.get(f"/api/cases/{cid}/sheet").json()["linhas"] if x["numero"] == NUM)
+    assert volta["estado"] == "pronto" and "analisado manualmente" not in (volta["valores"].get("observacoes") or "")  # o texto da IA volta
+    assert c.put(f"/api/cases/{cid}/processes/NAO/manual", json={"manual": True}).status_code == 404
+
+
+def test_manual_note_is_written_in_the_exported_spreadsheet(env):
+    c, _, _ = env
+    cid = c.post("/api/cases", json={"nome": "M2"}).json()["id"]
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    numero = c.get(f"/api/cases/{cid}").json()["processos"][0]["numero"]
+    c.put(f"/api/cases/{cid}/processes/{numero}/manual", json={"manual": True, "nota": "Concluído em 05/11"})
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    achou = [cel.value for ws in wb.worksheets for row in ws.iter_rows() for cel in row if isinstance(cel.value, str) and "analisado manualmente" in cel.value]
+    assert achou and "Concluído em 05/11" in achou[0]
+
+
+def test_medicoes_pdf_endpoint_returns_a_pdf_without_the_word_caso_in_the_title(env):
+    import pymupdf
+    c, _, tmp = env
+    cid = c.post("/api/cases", json={"nome": "Grupo X"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    r = c.get(f"/api/cases/{cid}/medicoes.pdf?tz=180")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf" and "Medicoes" in r.headers["content-disposition"]
+    texto = "".join(p.get_text() for p in pymupdf.open(stream=r.content))
+    assert "Relatório de medições" in texto and "Grupo X" in texto and NUM in texto and "Registro de execução" in texto
+    assert "Medições do caso" not in texto
+    assert "Medições do caso" not in open("static/index.html", encoding="utf-8").read()
+    assert c.get("/api/cases/inexistente/medicoes.pdf").status_code == 404

@@ -31,7 +31,8 @@ class Sheet:
         return [f for f in self.fields if f.source == "ai"]
 
 
-_OBS_EF = "Texto do relatório de status: eventos cronológicos no formato 'Evento N, VOL N, pg. N, ID N - descrição'."
+_OBS_EF = ("Cronologia dos atos processuais: UMA LINHA POR ATO, em ordem cronológica crescente, no formato "
+           "'<rótulo do trecho> - dd/mm/aaaa - descrição' (ex.: 'Evento 12, pg. 1 - 05/10/2006 - Auto de avaliação do imóvel…'). Só a lista.")
 _HON = "Valor da condenação em honorários (R$), se houver; senão null."
 _BEN = "Beneficiário dos honorários (ex.: União/PGFN, parte contrária), se houver; senão null."
 
@@ -131,3 +132,9 @@ def resolve_tipo(tipo: str | None, classe: str) -> tuple[str, str]:
     if tipo in TIPOS:
         return TIPOS[tipo][1], TIPOS[tipo][2]
     return classify(classe)
+
+
+def manual_text(proc: dict) -> str:
+    """Texto que a planilha mostra no campo de observações de um processo feito manualmente."""
+    nota = (proc.get("manual_note") or "").strip()
+    return "Processo analisado manualmente." + (f" {nota}" if nota else "")
