@@ -816,3 +816,36 @@ def test_execucao_fiscal_prompt_is_chronology_only():
         assert velho not in texto  # os quatro blocos de resumo saíram
     assert "ordem cronológica crescente" in texto and "[ORIGEM] - [dd/mm/aaaa]" in texto
     assert "Não informado no extrato" in texto and "mero expediente" in texto
+
+
+def test_extraction_error_clears_on_retry_and_on_pdf_delete_and_times_are_recorded(env):
+    c, llm, tmp = env
+    cid = c.post("/api/cases", json={"nome": "G"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    pdf = (tmp / "a.pdf").read_bytes()
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", pdf, "application/pdf")}, data={"case_id": cid}).json()
+    w = wait(c, d["id"])
+    doc = c.get(f"/api/documents/{d['id']}").json()
+    assert doc["started_at"] and doc["finished_at"] and doc["finished_at"] >= doc["started_at"]  # leitura do PDF anotada
+    proc = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+    assert proc["ext_status"] == "ok" and proc["ext_started_at"] and proc["ext_finished_at"]
+
+    def boom(system, user, schema):
+        raise RuntimeError("503 UNAVAILABLE falha de teste")
+    llm.extract = boom
+    c.post(f"/api/cases/{cid}/processes/{NUM}/reextract")
+    for _ in range(100):
+        p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+        if p["stale"] == 0 and p["error"]:
+            break
+        time.sleep(0.1)
+    assert p["error"] and p["ext_status"] == "erro" and p["ext_finished_at"]  # erro também tem fim registrado
+
+    c.delete(f"/api/documents/{d['id']}")
+    for _ in range(100):
+        p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+        if p["stale"] == 0:
+            break
+        time.sleep(0.1)
+    assert p["error"] is None  # o erro sai junto com o PDF
+

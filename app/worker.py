@@ -90,10 +90,12 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
     doc = db.get(doc_id)
     if not doc:
         return
+    t_wall = time.time()
     try:
         t_ini = time.perf_counter()
         total = page_count(doc["path"])
-        db.update(doc_id, status="processing", pages_total=total, pages_done=0, pages_ocr=0, error=None)
+        db.update(doc_id, status="processing", pages_total=total, pages_done=0, pages_ocr=0, error=None,
+                  started_at=t_wall, finished_at=None)
         store.delete(doc_id)  # reprocessamento idempotente
         start = doc.get("page_start") or 1
         vol = doc.get("volume")
@@ -144,13 +146,13 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
                        else pje.extract_docs(pages, doc_id) if sistema == "pje" else [])  # linha do tempo fixa, lida do próprio PDF
         eventos_path(settings, doc_id).write_text(json.dumps(eventos_doc, ensure_ascii=False), encoding="utf-8")
         meta["n_eventos"] = len(eventos_doc)
-        db.update(doc_id, status="done", pages_done=total, pages_ocr=ocr_pages, metadata=meta,
+        db.update(doc_id, status="done", finished_at=time.time(), pages_done=total, pages_ocr=ocr_pages, metadata=meta,
                   numero_processo=numero, classe=classe, sistema=sistema)
         if numero:
             db.mark_stale(doc["case_id"], numero)
     except Exception as e:  # noqa: BLE001
         log.exception("falha ao processar %s", doc_id)
-        db.update(doc_id, status="error", error=str(e))
+        db.update(doc_id, status="error", error=str(e), finished_at=time.time(), started_at=doc.get("started_at") or t_wall)
     finally:
         extract_ready(doc["case_id"], settings, db, store, llm_client)
 
@@ -171,10 +173,12 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                     llm_client=None) -> None:
     if not db.claim_extraction(case_id, numero):
         return
+    # nova tentativa: o erro anterior sai de cena e o registro de início/fim recomeça
+    db.update_process(case_id, numero, error=None, ext_started_at=time.time(), ext_finished_at=None, ext_status="rodando")
     try:
         docs = db.docs_for_process(case_id, numero)
         if not docs:  # todos os PDFs do processo foram excluídos
-            db.finish_extraction(case_id, numero, error=None)
+            db.finish_extraction(case_id, numero, error=None, ext_started_at=None, ext_finished_at=None, ext_status=None)
             return
         pages: list[dict] = []
         for d in docs:  # partes na ordem dos autos
@@ -218,10 +222,10 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             result["fields"]["observacoes"] = (
                 f"{NAO_ENCONTRADO}: extração por IA indisponível (nenhuma chave de LLM configurada: GEMINI_API_KEY ou ANTHROPIC_API_KEY).")
         db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema,
-                             reviewed=0, error=None)
+                             reviewed=0, error=None, ext_finished_at=time.time(), ext_status="ok")
     except Exception as e:  # noqa: BLE001
         log.exception("falha na extração de %s", numero)
-        db.finish_extraction(case_id, numero, error=explain_llm_error(e))
+        db.finish_extraction(case_id, numero, error=explain_llm_error(e), ext_finished_at=time.time(), ext_status="erro")
 
 
 def handle_job(job: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:

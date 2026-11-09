@@ -72,6 +72,9 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                 db.update(d["id"], status="queued", error=None)
                 queue.enqueue(d["id"])
                 n += 1
+        for case_id, numero in db.release_stuck_extractions(1800):  # extração "rodando" há 30 min: o worker caiu, refaz
+            queue.enqueue(f"{READY_PREFIX}{case_id}")
+            n += 1
         return n
 
     def watchdog() -> None:
@@ -141,12 +144,12 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         return c
 
     def _estado(p: dict) -> str:
-        if p.get("error") and not p.get("result"):
-            return "erro"
-        if p.get("stale") == 2:
+        if p.get("stale") == 2:  # em andamento ou à espera de nova tentativa: vale mais que um erro antigo
             return "extraindo"
         if p.get("stale") == 1:
             return "desatualizado" if p.get("reviewed") else "aguardando"
+        if p.get("error") and not p.get("result"):
+            return "erro"
         return "pronto" if p.get("result") else "sem_pdf"
 
     @app.get("/api/cases/{cid}")
@@ -220,7 +223,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         """Refaz a extração juntando todas as partes (descarta edições da revisão)."""
         if not db.get_process(cid, numero):
             raise HTTPException(404, "Processo não encontrado.")
-        db.update_process(cid, numero, reviewed=0)
+        db.update_process(cid, numero, reviewed=0, error=None)  # o erro antigo não fica na tela enquanto refaz
         db.mark_stale(cid, numero)
         queue.enqueue(f"{EXTRACT_PREFIX}{cid}|{numero}")
         return {"status": "queued"}
@@ -350,6 +353,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         _remove_doc(d)
         if d["case_id"]:
             if d["numero_processo"] and db.get_process(d["case_id"], d["numero_processo"]):
+                db.update_process(d["case_id"], d["numero_processo"], error=None)  # o erro era deste material: sai junto com o PDF
                 db.mark_stale(d["case_id"], d["numero_processo"])
             queue.enqueue(f"{READY_PREFIX}{d['case_id']}")
         return {"status": "deleted"}

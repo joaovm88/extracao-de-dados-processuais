@@ -11,14 +11,17 @@ from typing import Any, Optional
 _JSON_COLS = ("metadata", "result", "mcfly")
 # stale: 0 = extração em dia | 1 = há material novo a extrair | 2 = extraindo agora
 _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEGER DEFAULT 0", "classe": "TEXT",
-              "sheet": "TEXT", "tipo": "TEXT", "sistema": "TEXT", "error": "TEXT"}
+              "sheet": "TEXT", "tipo": "TEXT", "sistema": "TEXT", "error": "TEXT",
+              # registro da última extração por IA: início/fim (epoch) e resultado ('rodando' | 'ok' | 'erro')
+              "ext_started_at": "REAL", "ext_finished_at": "REAL", "ext_status": "TEXT"}
 
 
 # Colunas de documents adicionadas ao longo das versões: bancos antigos (volume do Docker) são migrados na abertura.
 _DOC_COLS = {"case_id": "TEXT", "numero_processo": "TEXT", "volume": "INTEGER", "evento": "TEXT", "tipo": "TEXT",
              "sistema": "TEXT", "parte": "INTEGER", "page_start": "INTEGER DEFAULT 1", "classe": "TEXT",
              "pages_total": "INTEGER DEFAULT 0", "pages_done": "INTEGER DEFAULT 0", "pages_ocr": "INTEGER DEFAULT 0",
-             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL", "sha256": "TEXT"}
+             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL", "sha256": "TEXT",
+             "started_at": "REAL", "finished_at": "REAL"}  # leitura do PDF: início e fim (êxito ou erro)
 
 
 class MetadataDB:
@@ -121,6 +124,16 @@ class MetadataDB:
         with self._lock:
             self._conn.execute("UPDATE processes SET stale=1 WHERE case_id=? AND numero=?", (case_id, numero))
             self._conn.commit()
+
+    def release_stuck_extractions(self, older_than_s: float) -> list[tuple[str, str]]:
+        """Extrações 'rodando' há mais tempo que o limite (worker caiu no meio): voltam a 'aguardando' para serem refeitas."""
+        corte = time.time() - older_than_s
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT case_id, numero FROM processes WHERE stale=2 AND (ext_started_at IS NULL OR ext_started_at < ?)", (corte,)).fetchall()
+            self._conn.execute("UPDATE processes SET stale=1 WHERE stale=2 AND (ext_started_at IS NULL OR ext_started_at < ?)", (corte,))
+            self._conn.commit()
+        return [(r["case_id"], r["numero"]) for r in rows]
 
     def claim_extraction(self, case_id: str, numero: str) -> bool:
         """Reserva atômica: só um worker extrai cada processo."""

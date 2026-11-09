@@ -257,7 +257,7 @@ function renderAssistInfo() {
   $('assist-info').innerHTML = `<div class="info-top"><span class="num">${esc(l.numero)}</span><span class="tag ${cls}">${txt}</span>
       ${ed ? `<span class="tag ${l.reviewed ? 'ok' : 'blue'}">${l.reviewed ? 'revisado' : 'a revisar'}</span>` : ''}
       ${l.modelo ? `<span class="chip">${esc(MODELO[l.modelo] || l.modelo)}</span>` : ''}${l.sistema ? `<span class="chip">${esc(l.sistema)}</span>` : ''}${l.paginas ? `<span class="chip">${l.paginas} págs.</span>` : ''}${l.medidas ? `<span class="chip" title="Páginas enviadas à IA e tokens da extração">IA viu ${l.medidas.contexto.paginas_enviadas}/${l.medidas.contexto.paginas_total} págs. · ${fmtN(l.medidas.tokens?.entrada)} tokens</span>` : ''}</div>
-    ${l.error ? `<div class="alert err"><b>Erro na extração.</b> ${esc(l.error)}${l.docs.length ? `<br><button class="btn sm" data-again>Tentar novamente</button>` : ''}</div>` : ''}
+    ${l.error && !['extraindo', 'aguardando'].includes(l.estado) ? `<div class="alert err"><b>Erro na extração.</b> ${esc(l.error)}${l.docs.length ? `<br><button class="btn sm" data-again>Tentar novamente</button>` : ''}</div>` : ''}
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
     <div class="acts">${ed ? `<button class="btn sm primary" data-toggle-rev>${l.reviewed ? '↺ Marcar como a revisar' : '✓ Marcar como revisado'}</button>` : ''}
@@ -358,20 +358,29 @@ function renderMed() {
   const tmpP = [[Math.round(leS), 'blue', 'leitura dos PDFs (' + fmtT(leS) + ')'], [Math.round(iaS), 'warn', 'IA (' + fmtT(iaS) + ')']];
   const tokP = [[tin, 'blue', 'entrada'], [tout, 'warn', 'saída']];
   const porDia = medIa ? Math.floor(8 * 3600 / (medIa + (docs.length ? leS / docs.length : 0))) : null;
-  const kpi = (rot, val, sub) => `<div class="kpi"><span>${rot}</span><b>${val}</b><small>${sub}</small></div>`;
+  const kpi = (rot, val, sub, dica) => `<div class="kpi"><span>${rot}${dica ? `<i class="tip" tabindex="0" data-tip="${esc(dica)}">*</i>` : ''}</span><b>${val}</b><small>${sub}</small></div>`;
   $('med-sum').innerHTML = `<div class="kpis">
-      ${kpi('Processos extraídos', `${com.length}<em> de ${todos.length}</em>`, `${comPdf} com PDF enviado`)}
-      ${kpi('Tokens gastos', fmtN(tin + tout), `${fmtN(tin)} entrada · ${fmtN(tout)} saída`)}
-      ${kpi('Tempo médio por processo', com.length ? fmtT(medIa) : '—', 'só a chamada à IA')}
-      ${kpi('Ritmo estimado', porDia ? `~${porDia}<em> /8 h</em>` : '—', 'um processo por vez; baseado nas medições')}</div>
+      ${kpi('Processos extraídos', `${com.length}<em> de ${todos.length}</em>`, `${comPdf} com PDF enviado`, 'Processos cuja extração por IA terminou, de todos os processos do caso (incluindo os da planilha que ainda não têm PDF).')}
+      ${kpi('Tokens gastos', fmtN(tin + tout), `${fmtN(tin)} entrada · ${fmtN(tout)} saída`, 'Token é o pedaço de texto que a IA lê e escreve (em português, cerca de 2,5 caracteres). Entrada: o que enviamos (processo + prompt). Saída: o que a IA devolve (inclui o raciocínio). É a base da cobrança e dos limites do provedor.')}
+      ${kpi('Tempo médio por processo', com.length ? fmtT(medIa) : '—', 'só a chamada à IA', 'Média do tempo da chamada à IA por processo extraído. Não inclui a leitura/OCR dos PDFs. Esperas por erro 503 ou limite de uso do provedor entram na conta.')}
+      ${kpi('Ritmo estimado', porDia ? `~${porDia}<em> /8 h</em>` : '—', 'um processo por vez; baseado nas medições', 'Projeção de quantos processos cabem em 8 horas, um de cada vez: 8 h ÷ (tempo médio da IA + tempo médio de leitura do PDF). É uma estimativa e muda com o modelo e o tamanho dos processos.')}</div>
     <div class="mrows">
       <div><div class="mt">PDFs <b>${dc.length}</b></div>${barra(pdfP, dc.length)}${leg(pdfP)}</div>
       <div><div class="mt">Processos com PDF <b>${comPdf}</b></div>${barra(procP, comPdf)}${leg(procP)}</div>
       <div><div class="mt">Tempo total <b>${fmtT(leS + iaS)}</b></div>${barra(tmpP, leS + iaS)}${leg(tmpP)}<div class="muted">OCR: ${ocrP} página(s) em ${fmtT(ocrS)}</div></div>
       <div><div class="mt">Tokens <b>${fmtN(tin + tout)}</b></div>${barra(tokP, tin + tout)}${leg(tokP)}</div></div>
-    <div class="alert ${cortados.length ? 'warn' : 'ok'}">${!com.length ? 'Ainda não há extrações com medição. Processos extraídos antes desta versão não têm esses dados: use “Refazer extração”.'
-      : cortados.length ? `<b>${cortados.length} de ${com.length}</b> processo(s) foram <b>cortados</b>: a IA não viu todas as páginas. Se isso acontece em <b>muitos</b>, vale testar uma busca de páginas melhor (EmbeddingGemma 2); se for em poucos, aumentar <code>CONTEXT_BUDGET_CHARS</code> (quando a cota permitir) já resolve.`
-      : 'Nenhum processo foi cortado: a IA viu todas as páginas. Uma busca melhor <b>não mudaria</b> a extração desses processos.'}</div>`;
+    ${!com.length ? '<div class="alert warn">Ainda não há extrações com medição. Processos extraídos antes desta versão não têm esses dados: use “Refazer extração”.</div>' : ''}`;
+  const dh = t => t ? new Date(t * 1000).toLocaleString('pt-BR', {day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit'}) : '—';
+  const dur = (a, b) => a && b ? fmtT(b - a) : '—';
+  const reg = [];
+  for (const d of data.documentos) if (d.started_at) reg.push({t: d.started_at, tipo: 'Leitura do PDF', item: d.filename, ini: d.started_at, fim: d.finished_at,
+    res: d.status === 'error' ? ['err', 'erro'] : d.status === 'done' ? ['ok', 'êxito'] : ['blue', 'em andamento'], det: d.status === 'error' ? d.error : ''});
+  for (const l of todos) if (l.ext?.inicio) reg.push({t: l.ext.inicio, tipo: 'Extração por IA', item: l.numero, ini: l.ext.inicio, fim: l.ext.fim,
+    res: l.ext.status === 'erro' ? ['err', 'erro'] : l.ext.status === 'ok' ? ['ok', 'êxito'] : ['blue', 'em andamento'], det: l.ext.status === 'erro' ? l.error : ''});
+  reg.sort((a, b) => b.t - a.t);
+  $('med-log').tBodies[0].innerHTML = reg.map(r => `<tr><td>${r.tipo}</td><td><span class="num">${esc(r.item)}</span></td><td>${dh(r.ini)}</td><td>${dh(r.fim)}</td><td>${dur(r.ini, r.fim)}</td>
+    <td><span class="tag ${r.res[0]}">${r.res[1]}</span>${r.det ? `<div class="muted" title="${esc(r.det)}">${esc(String(r.det).slice(0, 90))}${String(r.det).length > 90 ? '…' : ''}</div>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="muted">Ainda não há registros. Os PDFs enviados a partir desta versão passam a ser anotados aqui.</td></tr>';
   $('med-tab').tBodies[0].innerHTML = ls.map(l => { const m = l.medidas, c = m?.contexto, tk = m?.tokens, d = l.docs.map(x => x.tempos).filter(Boolean);
     return `<tr><td><span class="num">${esc(l.numero)}</span></td><td>${c ? `${c.paginas_total}${barra([[c.paginas_enviadas, c.cortado ? 'warn' : 'ok', 'enviadas à IA'], [Math.max(c.paginas_total - c.paginas_enviadas, 0), 'line', 'não enviadas']], c.paginas_total)}` : (l.paginas ?? '—')}</td>
       <td>${c && c.modo === 'eventos' ? `texto integral de ${c.eventos_com_texto} de ${c.eventos_total} eventos ${c.cortado ? '<span class="tag warn">cortado</span>' : '<span class="tag ok">completo</span>'}<div class="muted">${c.paginas_enviadas} de ${c.paginas_total} págs. · expediente só no índice${m.cronologia ? ` · ${m.cronologia.datas_corrigidas} data(s) corrigida(s)` : ''}</div>`

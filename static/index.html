@@ -125,7 +125,9 @@
 
 <dialog id="dlg-med" class="wide"><form method="dialog" class="dlg">
   <header><h2>Medições do caso</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
-  <div class="dlg-body"><div id="med-sum"></div><div class="scroll"><table class="plain" id="med-tab"><thead><tr><th>Processo</th><th>Páginas</th><th>Enviadas à IA</th><th>Tokens (entrada / saída)</th><th>Tempo da IA</th><th>Leitura dos PDFs</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="dlg-body"><div id="med-sum"></div><div class="scroll"><table class="plain" id="med-tab"><thead><tr><th>Processo</th><th>Páginas</th><th>Enviadas à IA</th><th>Tokens (entrada / saída)</th><th>Tempo da IA</th><th>Leitura dos PDFs</th></tr></thead><tbody></tbody></table></div>
+    <h3 class="med-h">Registro de execução (data, hora e segundos)</h3>
+    <div class="scroll"><table class="plain" id="med-log"><thead><tr><th>Etapa</th><th>Arquivo / processo</th><th>Início</th><th>Fim</th><th>Duração</th><th>Resultado</th></tr></thead><tbody></tbody></table></div></div>
   <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
 </form></dialog>
 
