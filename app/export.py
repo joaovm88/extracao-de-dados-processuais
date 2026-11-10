@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from .schemas import (BENS_HEADERS, DJE_SIEF_HEADERS, FRAUDE_HEADERS, ORDEM_HEADER, RELATORIO_HEADERS, SHEETS, SITUACAO_HEADER,
-                      classify, itens_autorizados, manual_text, situacao_analise)
+                      classify, itens_autorizados, manual_text, normalize_fields, situacao_analise)
 from .template import item_row
 
 HEAD = PatternFill("solid", fgColor="1351B4")  # azul gov.br
@@ -59,7 +59,7 @@ def build_case_xlsx(case: dict, processes: list[dict]) -> bytes:
         res = p.get("result")
         sheet_key = res["sheet"] if res else classify(m.get("classe") or "")[0]
         sheet = SHEETS[sheet_key]
-        fields = dict(res["fields"] if res else {"digitalizado": "NÃO"})
+        fields = normalize_fields(sheet, res["fields"]) if res else {"digitalizado": "NÃO"}
         if p.get("manual"):  # registrado na planilha: feito manualmente (nenhum valor da IA)
             fields = {"observacoes": manual_text(p)}
             res = None

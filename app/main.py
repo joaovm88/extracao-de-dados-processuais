@@ -21,7 +21,7 @@ from .export import build_case_xlsx
 from .llm import get_llm
 from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
-from .schemas import SHEETS, SISTEMAS, TIPOS
+from .schemas import SHEETS, SISTEMAS, TIPOS, normalize_fields
 from .services import make_db, make_queue, make_store
 from .ingest import eventos as ev
 from .ingest import pje
@@ -272,6 +272,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                 raise HTTPException(400, f"Campo desconhecido: {k}")
             if f.options and v is not None and v not in f.options:
                 raise HTTPException(400, f"Valor inválido para '{f.header}'. Permitidos: {', '.join(f.options)}")
+            v = normalize_fields(sheet, {k: v}).get(k)  # data dd/mm/aaaa e valor em R$, mesmo digitados de outro jeito
             if res["fields"].get(k) != v:
                 mudou.append(f.header.split("(")[0].strip()[:40])
             res["fields"][k] = v

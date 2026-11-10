@@ -5,7 +5,7 @@ from typing import Optional
 from openpyxl import load_workbook
 
 from . import template as tpl
-from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, SHEETS, classify, item_status, manual_text
+from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, SHEETS, classify, item_status, manual_text, normalize_fields
 
 ABAS = [("execucoes_fiscais", "Execuções Fiscais"), ("outras_acoes", "Outras Ações"), ("embargos", "Embargos"),
         ("bens", "Outros Bens"), ("fraude", "Fraudes")]
@@ -61,7 +61,8 @@ def build(processes: list[dict], docs: list[dict], template_bytes: Optional[byte
         if manual:  # feito à mão: a planilha mostra só a marcação (o texto da IA, se houver, fica guardado e volta ao desfazer)
             valores["observacoes"] = manual_text(p)
         else:
-            valores.update(res.get("fields") or {})
+            campos = res.get("fields") or {}
+            valores.update(normalize_fields(SHEETS[res["sheet"]], campos) if res.get("sheet") in SHEETS else campos)
         aba = res.get("sheet") or classify(m.get("classe") or p.get("classe") or "")[0]
         linhas.append({
             "numero": p["numero"], "aba": aba, "estado": estado(p), "reviewed": bool(p.get("reviewed")), "error": p.get("error"),

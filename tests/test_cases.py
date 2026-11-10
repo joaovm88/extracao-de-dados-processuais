@@ -1117,3 +1117,54 @@ def test_template_optional_columns_get_order_number_and_analysis_status():
     b2 = io.BytesIO()
     wb2.save(b2)
     assert "Situação da análise" in tpl.analyze(b2.getvalue())["dicas"][0]
+
+
+def test_dates_money_and_art40_list_are_standardized_by_code():
+    from app.schemas import ARQUIVADA_40, fmt_arquivada, fmt_data_br, fmt_moeda_br
+    assert [fmt_data_br(x) for x in ("2018-09-28", "28.9.18", "5-10-2006", "28 de setembro de 2018", "28/09/2018", "sem data")] == \
+        ["28/09/2018", "28/09/2018", "05/10/2006", "28/09/2018", "28/09/2018", "sem data"]
+    assert [fmt_moeda_br(x) for x in ("2627732.00", "R$2.627.732,00", "2,627,732.00", "1.250,4", "1.250", "746019", "R$ 0", "R$ 10 mil (aprox.)")] == \
+        ["R$ 2.627.732,00", "R$ 2.627.732,00", "R$ 2.627.732,00", "R$ 1.250,40", "R$ 1.250,00", "R$ 746.019,00", "R$ 0,00", "R$ 10 mil (aprox.)"]
+    assert ARQUIVADA_40 == ["Não", "< 3 anos", "> 3 anos"]
+    assert [fmt_arquivada(x, True) for x in ("NÃO", "menos de 3 anos", "> 3 ANOS", "SIM", None)] == ["Não", "< 3 anos", "> 3 anos", None, None]
+    sheet = SHEETS["execucoes_fiscais"]
+    out = ex.validate(sheet, {"valor_garantia": "746019.6", "data_garantia": "2006-10-05", "arquivada_40": "SIM", "observacoes": "x"})
+    assert out["valor_garantia"] == "R$ 746.019,60" and out["data_garantia"] == "05/10/2006"
+    assert out["arquivada_40"] is None and "arquivada_40" in out["_revisar"]  # 'SIM' sem o prazo não cabe na lista: o analista escolhe
+    assert next(f for f in sheet.fields if f.key == "arquivada_40").options == ARQUIVADA_40
+    assert ex.normalize_fraude({"tipo": "SIMULAÇÃO", "valor_causa": "128400.11"})["valor_causa"] == "R$ 128.400,11"
+
+
+def test_pgfn_guidelines_file_is_appended_to_the_prompt_without_comments(tmp_path, monkeypatch):
+    monkeypatch.setattr(ex, "PROMPTS_DIR", tmp_path)
+    (tmp_path / "outras_acoes.md").write_text("PROMPT BASE", encoding="utf-8")
+    assert ex.load_orientacoes() == ""
+    (tmp_path / "orientacoes_pgfn.md").write_text("<!-- instruções\nde uso -->\nRegra da casa: X.\n", encoding="utf-8")
+    assert ex.load_orientacoes() == "Regra da casa: X."
+    visto = {}
+
+    class L:
+        def extract(self, system, user, schema):
+            visto["s"] = system
+            return {"observacoes": "ok"}
+
+    ex.extract_with_llm(SHEETS["outras_acoes"], "outras_acoes", "ctx", L())
+    assert "ORIENTAÇÕES DA PGFN" in visto["s"] and "Regra da casa: X." in visto["s"] and "instruções" not in visto["s"]
+    assert "Datas SEMPRE no formato dd/mm/aaaa" in visto["s"] and "R$ 1.234,56" in visto["s"] and "Data de hoje:" in visto["s"]
+
+
+def test_review_normalizes_typed_date_and_value(env):
+    c, _, tmp = env
+    cid = c.post("/api/cases", json={"nome": "N"}).json()["id"]
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    lin = next(x for x in c.get(f"/api/cases/{cid}/sheet").json()["linhas"] if x["numero"] == NUM)
+    assert lin["valores"]["data_garantia"] == "28/09/2018" and lin["valores"]["arquivada_40"] == "Não"  # a IA respondeu 2018-09-28 e NÃO
+    assert c.put(f"{base}/review", json={"fields": {"data_garantia": "2020-01-31", "valor_garantia": "1500"}, "reviewed": False}).status_code == 200
+    f = c.get(base).json()["result"]["fields"]
+    assert f["data_garantia"] == "31/01/2020" and f["valor_garantia"] == "R$ 1.500,00"
+    assert c.put(f"{base}/review", json={"fields": {"arquivada_40": "SIM"}, "reviewed": False}).status_code == 400
+    assert c.put(f"{base}/review", json={"fields": {"arquivada_40": "> 3 anos"}, "reviewed": False}).status_code == 200

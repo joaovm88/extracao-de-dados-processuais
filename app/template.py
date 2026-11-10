@@ -13,7 +13,7 @@ from typing import Optional
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
-from .schemas import EXTRA_COLS, SHEETS, classify, itens_autorizados, manual_text, situacao_analise
+from .schemas import EXTRA_COLS, SHEETS, normalize_fields, classify, itens_autorizados, manual_text, situacao_analise
 
 PENDING = PatternFill("solid", fgColor="FFF3CD")  # linhas ainda não revisadas
 
@@ -151,7 +151,7 @@ def _values(kind: str, proc: dict) -> dict:
         if proc.get("manual"):  # feito à mão: só a marcação vai para a planilha (nenhum valor da IA)
             vals["observacoes"] = manual_text(proc)
             return vals
-        fields = res["fields"] if res else {"digitalizado": "NÃO"}
+        fields = normalize_fields(SHEETS[kind], res["fields"]) if res else {"digitalizado": "NÃO"}
         vals.update({k: v for k, v in fields.items() if v not in (None, "")})
     return vals
 

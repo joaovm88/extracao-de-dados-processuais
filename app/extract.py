@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from .ingest import eventos as ev
 from .ingest.entities import valid_cnpj, valid_cpf
-from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, NAO_ENCONTRADO, SHEETS, Sheet
+from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, fmt_moeda_br, normalize_fields, NAO_ENCONTRADO, SHEETS, Sheet
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -26,6 +26,15 @@ _FIELD_QUERIES = {
 
 def load_prompt(name: str) -> str:
     return (PROMPTS_DIR / f"{name}.md").read_text(encoding="utf-8")
+
+
+def load_orientacoes() -> str:
+    """Orientações próprias do analista/PGFN (prompts/orientacoes_pgfn.md), acrescentadas a todos os prompts de extração.
+    Comentários <!-- ... --> não são enviados. Arquivo vazio ou ausente: nada é acrescentado."""
+    p = PROMPTS_DIR / "orientacoes_pgfn.md"
+    if not p.is_file():
+        return ""
+    return re.sub(r"<!--.*?-->", "", p.read_text(encoding="utf-8"), flags=re.DOTALL).strip()
 
 
 def tool_schema(sheet: Sheet) -> dict:
@@ -202,9 +211,14 @@ def citation_rule(sistema) -> str:
 
 def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False) -> dict:
     """Chama o LLM (Gemini ou Anthropic) com saída JSON restrita ao schema da aba."""
+    import datetime
+
+    orient = load_orientacoes()
     system = (
         load_prompt(prompt_name)
+        + (f"\n\n---\nORIENTAÇÕES DA PGFN (procedimentos e critérios de análise; aplique-os ao interpretar os autos):\n{orient}" if orient else "")
         + "\n\n---\nREGRAS DE SAÍDA ESTRUTURADA:\n"
+        f"- Data de hoje: {datetime.date.today():%d/%m/%Y}. Datas SEMPRE no formato dd/mm/aaaa. Valores SEMPRE em reais, no formato 'R$ 1.234,56'.\n"
         "- Devolva os campos pedidos no schema. 'observacoes' recebe o relatório no formato do prompt acima.\n"
         "- Cada trecho do processo vem com um rótulo entre colchetes; copie EXATAMENTE esses rótulos nas citações. NUNCA invente nº de evento, ID ou página.\n"
         + citation_rule(sistema) +
@@ -225,6 +239,9 @@ def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=
 def validate(sheet: Sheet, data: dict) -> dict:
     """Garante listas fechadas: valor fora da lista vira null e o campo entra em revisão."""
     review = []
+    antes = dict(data)
+    data.update(normalize_fields(sheet, {f.key: data.get(f.key) for f in sheet.ai_fields}, estrito=True))  # dd/mm/aaaa, R$, art. 40
+    review += [f.key for f in sheet.ai_fields if antes.get(f.key) not in (None, "") and data.get(f.key) is None]
     for f in sheet.ai_fields:
         v = data.get(f.key)
         if f.options and v is not None and v not in f.options:
@@ -250,6 +267,7 @@ def normalize_fraude(item: dict) -> dict:
     """Encaixa 'tipo' e 'analise' nas listas fechadas da planilha (aceita variação de acento/caixa). Tipo desconhecido vira
     'OUTRAS FRAUDES' (o texto original vai para o resumo); análise desconhecida fica vazia para o analista escolher."""
     out = dict(item)
+    out["valor_causa"] = fmt_moeda_br(out.get("valor_causa"))
     tipos = {_sem_acento(t): t for t in FRAUDE_TIPOS}
     t = _sem_acento(out.get("tipo"))
     if t and t not in tipos:

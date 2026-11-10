@@ -127,3 +127,8 @@ Limites: um worker só; o índice de busca em memória se perde ao reiniciar (o 
 - **Envio em lote:** arraste uma pasta inteira (com subpastas) ou use *📁 Escolher pasta*. Os PDFs são agrupados pelo nº CNJ lido do nome do arquivo; os sem número são sinalizados e o sistema tenta achar o nº no texto. Uma falha não interrompe o lote.
 - **Colunas opcionais do modelo:** se uma aba de processos tiver a coluna `Nº` (ou `Ordem`/`Item`) e/ou `Situação da análise`, a exportação preenche o nº de ordem e "Feito manualmente / Revisado / A revisar". Sem modelo, as duas colunas vão ao final das abas.
 - **Cronologia:** um ato por linha, com uma linha em branco entre os atos.
+
+## Formatos e orientações da PGFN
+
+- **Formatos garantidos pelo código** (não dependem da IA): datas em `dd/mm/aaaa`, valores em `R$ 1.234,56` e a coluna *Arquivada 40 LEF?* com a lista `Não` / `< 3 anos` / `> 3 anos` (`ARQUIVADA_40` em `app/schemas.py`). Vale para o que a IA devolve, para o que o analista digita e para a planilha exportada.
+- **`prompts/orientacoes_pgfn.md`:** texto opcional com procedimentos e critérios da PGFN, acrescentado a todos os prompts de extração. Escreva regras curtas (até ~2 páginas); os comentários `<!-- -->` do arquivo não são enviados.
