@@ -516,12 +516,19 @@ async function ask(q) {
   if (sel === num) renderChat();
 }
 async function addToNotes(i) {
-  const m = chats[sel][i], l = row(sel); if (!l) return;
+  const m = chats[sel][i], l = row(sel), num = sel; if (!l) return;
   if (!editable(l)) return toast('Este processo ainda não tem extração para receber observações.', 'err');
-  const novo = `${(l.valores.observacoes || '').trim()}\n\n[Assistente · ${m.q}]\n${m.text}`.trim();
-  try { await api(`/api/cases/${caseId}/processes/${enc(sel)}/review`, json('PUT', {observacoes: novo, reviewed: false}));
-    l.valores.observacoes = novo; l.reviewed = false; dataKey = JSON.stringify(data); toast('Resposta adicionada às observações (marque como revisado após conferir)', 'ok'); renderGrid(); renderAssistInfo(); }
-  catch (e) { toast(e.message, 'err'); }
+  try {  // a resposta entra já no formato da cronologia: 'Evento/ID, pg. - data - ato', na ordem das datas
+    toast('Convertendo a resposta em atos da cronologia…');
+    const r = await api(`/api/cases/${caseId}/processes/${enc(num)}/observacoes/assistente`, json('POST', {pergunta: m.q, resposta: m.text}));
+    if (!r.adicionadas) {
+      if (!confirm('A resposta não cita nenhum ato com origem (Evento/ID e página), então não dá para colocá-la no formato da cronologia.\n\nAdicionar mesmo assim, como texto, no fim das observações?')) return;
+      const novo = `${(l.valores.observacoes || '').trim()}\n\n[Assistente · ${m.q}]\n${m.text.replace(/\*\*/g, '')}`.trim();
+      await api(`/api/cases/${caseId}/processes/${enc(num)}/review`, json('PUT', {observacoes: novo, reviewed: false}));
+      toast('Resposta adicionada como texto (marque como revisado após conferir)', 'ok');
+    } else toast(`${r.adicionadas} ato(s) adicionados à cronologia${r.datas_do_sistema ? ', com a data do sistema' : ''}${r.inexistentes.length ? ` · ⚠ confira: ${r.inexistentes.join(', ')} não existe(m) no índice` : ''}. Marque como revisado após conferir.`, r.inexistentes.length ? 'err' : 'ok');
+    await refresh(true);
+  } catch (e) { toast(e.message, 'err'); }
 }
 $('chat').onsubmit = e => { e.preventDefault(); ask($('q').value); };
 

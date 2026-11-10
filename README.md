@@ -142,3 +142,7 @@ Botão **📥 Mcfly** na barra da planilha. Envie o .xlsx gerado no Mcfly (SAJ);
 - **Formato do SAJ:** lê a aba *Relatórios* do export (38 colunas), trata ` - ` como vazio e reconhece o mesmo processo mesmo com pontuação diferente no número.
 - **Seleção:** marque/desmarque por linha, *Só os que já estão no caso*, ou filtre *só os que pedem atenção*.
 - Os valores preenchem as colunas *Inscrições processo principal* e *Somatório inscrições* (em `R$`) na tela e na planilha exportada; o que o cadastro já tinha e o Mcfly novo não trouxe é mantido.
+
+## Resposta do assistente nas observações
+
+*Adicionar às observações* converte a resposta do chat em linhas da cronologia (`Evento/ID, pg. - dd/mm/aaaa - ato`), uma por fato citado, e as encaixa na ordem das datas. No eproc e no PJe a data vem do índice do próprio processo. A IA redige as linhas (só são aceitas origens que constam da resposta); se ela estiver indisponível, vale uma conversão por regras. Resposta sem nenhuma citação pode ser adicionada como texto, mediante confirmação.

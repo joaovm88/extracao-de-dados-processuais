@@ -1239,3 +1239,40 @@ def test_mcfly_real_export_shape_dash_placeholders_party_groups_and_number_punct
     imp = c.post(f"/api/cases/{cid}/mcfly", files={"file": ("x.xlsx", buf.getvalue(), "application/octet-stream")},
                  data={"selecionados": '["0000010-10.2020.4.01.3811"]'}).json()
     assert imp == {"importados": 1, "novos": 1, "atualizados": 0}
+
+
+def test_chat_answer_becomes_chronology_lines():
+    resp = ("Sim, existem valores bloqueados:\n\n* **R$ 1.125,61** em nome de Divino (Evento 68, pg. 3).\n"
+            "* **R$ 233.644,19** em ativo escriturado (Evento 68, pgs. 4 a 5).\n* Sem origem nenhuma aqui.")
+    linhas, modo = ex.atos_da_resposta("Existe valor bloqueado pelo SISBAJUD?", resp, None)
+    assert modo == "regras" and linhas == ["Evento 68, pg. 3 - data não informada - R$ 1.125,61 em nome de Divino.",
+                                           "Evento 68, pg. 4 - data não informada - R$ 233.644,19 em ativo escriturado."]
+
+    class L:
+        def generate(self, system, user, max_tokens=1000):
+            assert "linhas de cronologia" in system and "SISBAJUD" in user
+            return ("- **Evento 68, pg. 3** – 10/05/2024 – Bloqueio via Sisbajud de R$ 1.125,61 em nome de Divino.\n"
+                    "Evento 99, pg. 1 - 01/01/2020 - Ato com origem que NÃO está na resposta.\nTexto solto.")
+    linhas, modo = ex.atos_da_resposta("Existe valor bloqueado pelo SISBAJUD?", resp, L())
+    assert modo == "ia" and linhas == ["Evento 68, pg. 3 - 10/05/2024 - Bloqueio via Sisbajud de R$ 1.125,61 em nome de Divino."]
+
+    class Fora:
+        def generate(self, *a, **k):
+            raise RuntimeError("503 UNAVAILABLE")
+    assert ex.atos_da_resposta("q", resp, Fora())[1] == "regras"  # IA fora do ar: cai para as regras
+    assert ex.atos_da_resposta("q", "Não encontrei essa informação.", None) == ([], "regras")
+
+
+def test_assistant_answer_goes_to_observations_in_chronology_format(env):
+    c, llm, tmp = env
+    cid, _ = _caso_com_pdf(c, tmp, "Obs")
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    antes = c.get(base).json()["result"]["fields"]["observacoes"]
+    r = c.post(f"{base}/observacoes/assistente", json={"pergunta": "Há bloqueio?", "resposta": "Sim: **R$ 48.320,15** bloqueados (VOL 001, pg. 2)."}).json()
+    assert r["adicionadas"] == 1 and r["modo"] == "regras"  # o LLM de teste não devolve linhas no formato: valem as regras
+    obs = c.get(base).json()["result"]["fields"]["observacoes"]
+    assert antes.strip() in obs and obs.endswith("VOL 001, pg. 2 - data não informada - Sim: R$ 48.320,15 bloqueados.") and "**" not in obs
+    assert "[Assistente" not in obs and c.get(base).json()["reviewed"] == 0
+    assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "Há bloqueio?", "resposta": "Sim: **R$ 48.320,15** bloqueados (VOL 001, pg. 2)."}).json()["adicionadas"] == 0  # não duplica
+    assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "x", "resposta": "Não encontrei."}).json()["adicionadas"] == 0
+    assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Resposta do assistente"

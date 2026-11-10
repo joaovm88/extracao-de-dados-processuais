@@ -379,6 +379,59 @@ def format_cronologia(value) -> Optional[str]:
     return "\n\n".join(x for x in out if x)  # um ato por linha, com uma linha em branco entre eles (leitura mais fácil)
 
 
+_ORIGEM = re.compile(r"(?:Evento\s+\d+|ID\s+\d{6,}|VOL\s+\d+)(?:\s*,\s*(?:VOL\s+\d+|pg\.\s*\d+|ID\s+\d+))*", re.IGNORECASE)
+_PGS = re.compile(r"\bp[áa]?gs?\.?\s*(\d+)(?:\s+(?:a|e)\s+\d+)*", re.IGNORECASE)  # 'pgs. 1 a 5' -> 'pg. 1'
+ATOS_SYSTEM = (
+    "Você converte a resposta de um assistente jurídico em linhas de cronologia processual. Devolva SOMENTE as linhas, uma por ato ou "
+    "fato citado, no formato exato:\n<ORIGEM> - <dd/mm/aaaa ou 'data não informada'> - <descrição>\n"
+    "- <ORIGEM> é a citação que acompanha o fato na resposta, copiada como está (ex.: 'Evento 68, pg. 3', 'ID 3160597, pg. 2', 'VOL 001, pg. 12'). "
+    "Se a citação for um intervalo de páginas, use a primeira página.\n"
+    "- A data só entra se constar da resposta; senão escreva 'data não informada'. Nunca invente data, evento, ID, página ou valor.\n"
+    "- A descrição é uma frase curta e completa, que se entende sozinha: traga o contexto da pergunta (ex.: 'Bloqueio via Sisbajud de "
+    "R$ 1.125,61 em nome de Fulano'). Preserve valores (R$) e nomes literalmente.\n"
+    "- Fato sem citação de origem: omita. Vários fatos com a mesma origem: uma linha para cada um.\n"
+    "- Sem markdown, sem marcadores, sem título, sem comentários. Se a resposta disser que a informação não foi encontrada, devolva vazio."
+)
+
+
+def _limpa_md(t: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"[*_`#]+", "", t)).strip()
+
+
+def _atos_por_regras(resposta: str) -> list[str]:
+    """Sem IA: cada item da resposta que traz uma citação vira uma linha '<origem> - data não informada - <texto>'."""
+    out = []
+    for item in re.split(r"\n+", resposta or ""):
+        item = _PGS.sub(lambda m: f"pg. {m.group(1)}", _limpa_md(_BULLET_LISTA.sub("", item)))
+        m = _ORIGEM.search(item)
+        if not m:
+            continue
+        texto = re.sub(r"\s*\((?:[^()]*?)" + re.escape(m.group(0)) + r"[^()]*\)", "", item)  # tira o '(Evento 68, pg. 3)'
+        texto = _ORIGEM.sub("", texto) if texto == item else texto
+        texto = re.sub(r"\(\s*\)", "", texto).strip(" ;,.-–—:") or "ato citado pelo assistente"
+        out.append(f"{re.sub(r'\s+', ' ', m.group(0))} - data não informada - {texto[0].upper() + texto[1:]}.")
+    return out
+
+
+def atos_da_resposta(pergunta: str, resposta: str, llm=None) -> tuple[list[str], str]:
+    """Resposta do chat -> linhas de cronologia ('origem - data - ato'). Usa a IA para redigir; se ela não estiver disponível,
+    falhar ou não devolver nenhuma linha válida, cai para a conversão por regras. Devolve (linhas, 'ia' | 'regras')."""
+    if llm is not None:
+        try:
+            txt = llm.generate(ATOS_SYSTEM, f"PERGUNTA DO ANALISTA:\n{pergunta}\n\nRESPOSTA DO ASSISTENTE:\n{resposta}", max_tokens=1500)
+            linhas = []
+            for l in (txt or "").splitlines():
+                l = _PGS.sub(lambda m: f"pg. {m.group(1)}", _limpa_md(_BULLET_LISTA.sub("", l)))
+                l = re.sub(r"\s*[–—]\s*", " - ", l)
+                if _ATO.match(l) and _ORIGEM.match(l) and _ORIGEM.match(l).group(0).lower() in _PGS.sub(lambda m: f"pg. {m.group(1)}", resposta).lower():
+                    linhas.append(l)  # só aceita origem que realmente está na resposta (a IA não cria citação)
+            if linhas:
+                return linhas, "ia"
+        except Exception:  # noqa: BLE001  limite de uso, serviço fora: a conversão por regras resolve
+            pass
+    return _atos_por_regras(resposta), "regras"
+
+
 def format_corresponsaveis(value) -> Optional[str]:
     """Padroniza a lista de corresponsáveis: uma pessoa/empresa por linha, 'NOME - CPF: …' ou 'NOME - CNPJ: …'.
     Aceita texto corrido, linhas com marcadores/numeração, ';' como separador, documento só com números ou lista JSON.

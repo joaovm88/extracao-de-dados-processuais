@@ -53,6 +53,11 @@ class ItensIn(BaseModel):
     valores: Optional[dict] = None  # só para "editar" (um índice)
 
 
+class AssistenteIn(BaseModel):
+    pergunta: str
+    resposta: str
+
+
 class ManualIn(BaseModel):
     manual: bool
     nota: Optional[str] = None
@@ -297,6 +302,39 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         if p.get("result") and not db.list_history(cid, numero):
             db.add_history(cid, numero, "Estado anterior", "como estava antes de o histórico existir",
                            {"result": p["result"], "reviewed": int(p.get("reviewed") or 0)})
+
+    @app.post("/api/cases/{cid}/processes/{numero}/observacoes/assistente")
+    def obs_do_assistente(cid: str, numero: str, body: AssistenteIn):
+        """Leva uma resposta do chat para as observações já no formato da cronologia ('Evento/ID, pg. - data - ato'), na ordem
+        das datas. No eproc/PJe a data de cada ato vem do índice do próprio processo."""
+        from .extract import atos_da_resposta, format_cronologia
+        from .ingest import eventos as ev_mod, pje as pje_mod
+
+        p = db.get_process(cid, numero)
+        if not p or not p.get("result"):
+            raise HTTPException(404, "Processo sem extração para receber observações.")
+        if p.get("manual"):
+            raise HTTPException(409, "Processo marcado como feito manualmente.")
+        linhas, modo = atos_da_resposta(body.pergunta, body.resposta, llm)
+        if not linhas:
+            return {"adicionadas": 0, "modo": modo, "observacoes": (p["result"].get("fields") or {}).get("observacoes") or ""}
+        res = p["result"]
+        _baseline(cid, numero, p)
+        atual = [x.strip() for x in (res["fields"].get("observacoes") or "").splitlines() if x.strip()]
+        novas = [l for l in linhas if l not in atual]
+        texto = "\n".join(atual + novas)
+        info = {"inexistentes": [], "datas_corrigidas": 0}
+        sistema = res.get("sistema")
+        evs = load_eventos(s, db.docs_for_process(cid, numero)) if sistema in ("eproc", "pje") else []
+        if evs:  # data registrada no sistema para cada evento/documento, e tudo em ordem cronológica
+            texto, info = (pje_mod if sistema == "pje" else ev_mod).validar_cronologia(texto, evs)
+        res["fields"]["observacoes"] = format_cronologia(texto)
+        res.pop("cronologia", None)
+        db.update_process(cid, numero, result=res, reviewed=0)
+        db.add_history(cid, numero, "Resposta do assistente", f"{len(novas)} ato(s) levados às observações: {body.pergunta[:80]}",
+                       {"result": res, "reviewed": 0})
+        return {"adicionadas": len(novas), "modo": modo, "observacoes": res["fields"]["observacoes"],
+                "inexistentes": info.get("inexistentes") or [], "datas_do_sistema": bool(evs)}
 
     @app.get("/api/cases/{cid}/processes/{numero}/history")
     def history(cid: str, numero: str):
