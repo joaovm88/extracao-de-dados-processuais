@@ -441,11 +441,15 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             esc = _json.loads(escolhas) if escolhas else {}
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"Planilha inválida: {e}")
+        from .mcfly import digitos
+
         novos = atualizados = 0
+        ja = {digitos(p["numero"]): p["numero"] for p in db.list_processes(cid)}  # o mesmo processo pode vir com outra pontuação
         for r in rows:
             if quais is not None and r["numero"] not in quais:
                 continue
             r.update({k: v for k, v in (esc.get(r["numero"]) or {}).items() if k in MCFLY_MAP and k != "numero"})
+            r["numero"] = ja.get(digitos(r["numero"]), r["numero"])
             atual = db.get_process(cid, r["numero"])
             if atual:  # mantém o que o cadastro já tinha e o Mcfly não trouxe
                 r = {**(atual.get("mcfly") or {}), **{k: v for k, v in r.items() if v not in (None, "")}}

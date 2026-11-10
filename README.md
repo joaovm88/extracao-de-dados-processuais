@@ -138,6 +138,7 @@ Limites: um worker só; o índice de busca em memória se perde ao reiniciar (o 
 Botão **📥 Mcfly** na barra da planilha. Envie o .xlsx gerado no Mcfly (SAJ); **nada é importado antes da conferência**:
 
 - **Repetidos:** as linhas do mesmo processo são reunidas em uma. Inscrições diferentes ficam juntas (uma por linha); se o somatório divergir entre as linhas, você escolhe o valor.
-- **De outra parte:** processo em que nenhum polo cita o devedor do caso (pelas palavras do nome do caso; se o nome não ajudar, pela parte mais frequente na planilha) é marcado *outra parte?*. Se também for novo no caso, já vem desmarcado.
+- **Vieram por engano:** os processos são reunidos em *grupos de partes* (têm alguma parte em comum, pelo CNPJ/CPF, direta ou indiretamente). Um grupo é do caso quando alguma parte cita o nome do caso ou quando algum processo dele já está no caso; os demais vêm desmarcados, com a etiqueta *sem ligação*. Dá para marcar ou desmarcar um grupo inteiro.
+- **Formato do SAJ:** lê a aba *Relatórios* do export (38 colunas), trata ` - ` como vazio e reconhece o mesmo processo mesmo com pontuação diferente no número.
 - **Seleção:** marque/desmarque por linha, *Só os que já estão no caso*, ou filtre *só os que pedem atenção*.
 - Os valores preenchem as colunas *Inscrições processo principal* e *Somatório inscrições* (em `R$`) na tela e na planilha exportada; o que o cadastro já tinha e o Mcfly novo não trouxe é mantido.

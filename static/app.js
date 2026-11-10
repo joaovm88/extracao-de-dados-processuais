@@ -414,22 +414,24 @@ $('mcfly-file').onchange = async e => {
     $('mcfly-sum').innerHTML = `<div class="kpis" style="margin:8px 0">
       <div class="kpi"><span>Linhas na planilha</span><b>${r.linhas}</b><small>${r.processos.length} processo(s) diferente(s)</small></div>
       <div class="kpi"><span>Repetidos</span><b>${r.repetidos}</b><small>${r.conflitos ? `${r.conflitos} com valores divergentes` : 'reunidos em uma linha'}</small></div>
-      <div class="kpi"><span>Podem ser de outra parte</span><b>${r.suspeitos}</b><small>${r.devedor.length ? `nenhum polo cita “${esc(r.devedor.join(' '))}”` : 'não foi possível identificar o devedor'}</small></div>
+      <div class="kpi"><span>Sem ligação com o caso</span><b>${r.suspeitos}</b><small>${r.grupos.length} grupo(s) de partes na planilha</small></div>
       <div class="kpi"><span>Novos no caso</span><b>${r.novos}</b><small>${r.fora_do_mcfly.length} do caso não estão neste Mcfly</small></div></div>
-      <p class="muted">Desmarque o que não é do devedor. Onde houver valores divergentes, escolha o correto. Linhas repetidas idênticas já foram reunidas, e as inscrições diferentes do mesmo processo ficam juntas.</p>`;
+      ${r.grupos.length > 1 ? `<div class="mc-grupos"><b>Grupos de partes encontrados</b> <span class="muted">(processos com alguma parte em comum, pelo CNPJ/CPF, ficam no mesmo grupo). Desmarque o grupo que não é deste caso:</span>
+        ${r.grupos.map(g => `<label class="mc-g"><input type="checkbox" data-mc-g="${g.id}" ${g.do_caso ? 'checked' : ''}> <span><b>Grupo ${g.id}</b> · ${g.processos} processo(s) · ${g.partes} parte(s) ${g.cita_caso ? '<span class="tag ok">cita o nome do caso</span>' : ''}${g.no_caso ? `<span class="tag ok">${g.no_caso} já no caso</span>` : ''}${!g.do_caso ? '<span class="tag err">sem ligação com o caso</span>' : ''}<br><span class="muted">${esc(g.principais.join(' · '))}${g.partes > g.principais.length ? ' …' : ''}</span></span></label>`).join('')}</div>` : ''}
+      <p class="muted">Onde houver valores divergentes, escolha o correto. Linhas repetidas do mesmo processo já foram reunidas, e as inscrições diferentes ficam juntas.</p>`;
     $('mcfly-tab').hidden = false; $('mcfly-filtros').hidden = false; $('mcfly-so').checked = false; renderMcfly();
   } catch (err) { $('mcfly-msg').className = 'msg err'; $('mcfly-msg').textContent = err.message; }
 };
 function renderMcfly() {
   const so = $('mcfly-so').checked, L = mc.procs.filter(p => !so || p.suspeito || Object.keys(p.conflitos).length || p.oculto);
   $('mcfly-tab').tBodies[0].innerHTML = L.map(p => { const i = mc.procs.indexOf(p), cf = p.conflitos.somatorio;
-    const tags = [p.suspeito ? '<span class="tag err" title="Nenhum dos polos cita o devedor deste caso: pode ter vindo por engano">outra parte?</span>' : '',
+    const tags = [`<span class="tag" title="Grupo de partes">G${p.grupo}</span>`, p.suspeito ? '<span class="tag err" title="Nenhuma parte deste processo liga-o ao caso (nem pelo nome, nem por processo já cadastrado): pode ter vindo por engano">sem ligação</span>' : '',
       p.linhas > 1 ? `<span class="tag ${Object.keys(p.conflitos).length ? 'warn' : ''}" title="Este processo aparece em ${p.linhas} linhas do Mcfly">${p.linhas}× repetido</span>` : '',
       Object.keys(p.conflitos).filter(k => k !== 'somatorio').length ? `<span class="tag warn" title="As linhas repetidas divergem em: ${esc(Object.keys(p.conflitos).filter(k => k !== 'somatorio').join(', '))}. Vale a primeira.">dados divergentes</span>` : '',
       p.oculto ? '<span class="tag">oculto no caso</span>' : '', p.no_caso ? '<span class="tag ok">já no caso</span>' : '<span class="tag blue">novo</span>'].join(' ');
     return `<tr class="${p.suspeito ? 'bad' : ''}"><td><input type="checkbox" data-mc="${i}" ${p.on ? 'checked' : ''} aria-label="Importar ${esc(p.numero)}"></td>
       <td><span class="num">${esc(p.numero)}</span><div class="muted">${esc(p.classe || '')}</div></td>
-      <td><div>${esc(p.polo_passivo || '—')}</div><div class="muted">${esc(p.polo_ativo || '')}</div></td>
+      <td>${p.partes.map(x => `<div>${esc(x)}</div>`).join('') || '—'}${p.partes_mais ? `<div class="muted">+${p.partes_mais} parte(s)</div>` : ''}</td>
       <td style="white-space:pre-line">${esc(p.inscricoes || '—')}</td>
       <td>${cf ? `<select data-mc-som="${i}">${cf.map(v => `<option ${v === (mc.esc[p.numero]?.somatorio || p.somatorio) ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select><div class="muted">valores divergentes: escolha</div>` : esc(p.somatorio || '—')}</td>
       <td>${tags}</td></tr>`; }).join('') || '<tr><td colspan="6" class="muted">Nada pede atenção.</td></tr>';
@@ -437,7 +439,12 @@ function renderMcfly() {
 }
 $('mcfly-tab').addEventListener('change', e => {
   if (e.target.matches('[data-mc]')) { mc.procs[+e.target.dataset.mc].on = e.target.checked; renderMcfly(); }
+  if (e.target.matches('[data-mc-g]')) return;
   if (e.target.matches('[data-mc-som]')) { const p = mc.procs[+e.target.dataset.mcSom]; mc.esc[p.numero] = {somatorio: e.target.value}; }
+});
+$('mcfly-sum').addEventListener('change', e => {  // marcar/desmarcar um grupo inteiro
+  if (!e.target.matches('[data-mc-g]')) return; const g = +e.target.dataset.mcG;
+  mc.procs.forEach(p => { if (p.grupo === g) p.on = e.target.checked && !p.oculto; }); renderMcfly();
 });
 $('mcfly-so').onchange = renderMcfly;
 $('mcfly-todos').onclick = () => { mc.procs.forEach(p => p.on = true); renderMcfly(); };
@@ -445,7 +452,7 @@ $('mcfly-nenhum').onclick = () => { mc.procs.forEach(p => p.on = false); renderM
 $('mcfly-caso').onclick = () => { mc.procs.forEach(p => p.on = p.no_caso && !p.oculto); renderMcfly(); };
 $('mcfly-ok').onclick = async () => {
   const sel = mc.procs.filter(p => p.on), susp = sel.filter(p => p.suspeito).length;
-  if (susp && !confirm(`${susp} processo(s) selecionado(s) podem não ser do devedor deste caso. Importar mesmo assim?`)) return;
+  if (susp && !confirm(`${susp} processo(s) selecionado(s) não têm ligação aparente com este caso. Importar mesmo assim?`)) return;
   const fd = new FormData(); fd.append('file', mc.file); fd.append('selecionados', JSON.stringify(sel.map(p => p.numero))); fd.append('escolhas', JSON.stringify(mc.esc));
   $('mcfly-ok').disabled = true;
   try { const r = await api(`/api/cases/${caseId}/mcfly`, {method: 'POST', body: fd}); toast(`Mcfly importado: ${r.atualizados} processo(s) atualizado(s), ${r.novos} novo(s)`, 'ok'); $('dlg-mcfly').close(); refresh(true); }

@@ -1210,3 +1210,32 @@ def test_mcfly_preview_flags_repeated_conflicting_and_foreign_processes_and_impo
     ef = [[x.value for x in row] for row in wb["Execuções Fiscais"].iter_rows()]
     lin = dict(zip(ef[0], next(l for l in ef if l[0] == NUM)))
     assert lin["Inscrições processo principal"].startswith("60 6 05 009561-42") and lin["Somatório inscrições (processo principal e vinculados)"] == "R$ 800.000,00"
+
+
+def test_mcfly_real_export_shape_dash_placeholders_party_groups_and_number_punctuation(env):
+    """Formato do export real do SAJ: ' - ' em campo vazio, várias partes por célula ('NOME - CNPJ' por linha) e valor numérico."""
+    from app.mcfly import analisar, read_mcfly
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Relatórios"
+    ws.append(["Número do processo CNJ", "Polo ativo", "Polo passivo", "Classe SAJ", "Valor da causa", "Inscrições processo principal",
+               "Somatório inscrições (processo principal e vinculados)"])
+    A, B = "ALFA SIDERURGIA LTDA - 11.222.333/0001-81", "JOAO DA SILVA - 111.222.333-44"
+    ws.append(["0000010-10.2020.4.01.3811", " - ", f"{A}\n{B}\n", "67 - Execução Fiscal (SIDA)", 3392.84, "60 2 99 000866-03 | ATIVA | R$ 10,00", "R$ 10,00"])
+    ws.append(["0000011-11.2020.4.01.3811", " - ", f"BETA HOLDING LTDA - 22.333.444/0001-55\n{B}", "67 - Execução Fiscal (SIDA)", 10, " - ", "R$ 0,00"])
+    ws.append(["0000012-12.2020.4.01.3811", "MINISTERIO DA FAZENDA - 00.394.460/0001-41", "OUTRA EMPRESA SA - 99.888.777/0001-66", "67 - Execução Fiscal (SIDA)", 5, " - ", "R$ 5,00"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    rows = read_mcfly(io.BytesIO(buf.getvalue()))
+    assert len(rows) == 3 and "polo_ativo" not in rows[0] and rows[0]["valor_causa"] == "R$ 3.392,84" and "inscricoes" not in rows[1]
+    r = analisar(io.BytesIO(buf.getvalue()), "Grupo Alfa", {"00000111120204013811": {"oculto": False}})  # já no caso, com outra pontuação
+    assert [(g["processos"], g["do_caso"]) for g in r["grupos"]] == [(2, True), (1, False)]  # Alfa e Beta ligadas pelo sócio em comum
+    assert r["grupos"][0]["cita_caso"] and r["grupos"][0]["no_caso"] == 1 and r["grupos"][1]["principais"] == ["OUTRA EMPRESA SA"]
+    por = {p["numero"]: p for p in r["processos"]}
+    assert por["0000011-11.2020.4.01.3811"]["no_caso"] and por["0000010-10.2020.4.01.3811"]["partes"] == ["ALFA SIDERURGIA LTDA", "JOAO DA SILVA"]
+    assert por["0000012-12.2020.4.01.3811"]["suspeito"] and not por["0000012-12.2020.4.01.3811"]["marcar"] and r["fora_do_mcfly"] == []
+    c, _, _ = env
+    cid = c.post("/api/cases", json={"nome": "Grupo Alfa"}).json()["id"]
+    imp = c.post(f"/api/cases/{cid}/mcfly", files={"file": ("x.xlsx", buf.getvalue(), "application/octet-stream")},
+                 data={"selecionados": '["0000010-10.2020.4.01.3811"]'}).json()
+    assert imp == {"importados": 1, "novos": 1, "atualizados": 0}

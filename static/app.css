@@ -188,3 +188,4 @@ tr:hover .copy,tr.sel .copy,.copy:focus,.copy.on{opacity:1}.copy:hover{backgroun
 .picked{max-height:38vh;overflow:auto}.up-bar{height:6px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:8px}.up-bar i{display:block;height:100%;width:0;background:var(--blue);transition:width .2s}
 #pasta-btn{margin-top:8px}
 #pasta-btn{align-self:center;width:auto}
+.mc-grupos{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:6px 0;font-size:12.5px}.mc-g{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line);margin-top:6px;cursor:pointer}.mc-g .tag{margin-left:4px}
