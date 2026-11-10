@@ -21,7 +21,7 @@ from .export import build_case_xlsx
 from .llm import get_llm
 from .ingest.citation import parse_filename
 from .mcfly import read_mcfly
-from .schemas import SHEETS, SISTEMAS, TIPOS, normalize_fields
+from .schemas import MCFLY_MAP, SHEETS, SISTEMAS, TIPOS, normalize_fields
 from .services import make_db, make_queue, make_store
 from .ingest import eventos as ev
 from .ingest import pje
@@ -426,17 +426,47 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         return {"status": "queued"}
 
     @app.post("/api/cases/{cid}/mcfly")
-    async def import_mcfly(cid: str, file: UploadFile = File(...)):
+    async def import_mcfly(cid: str, file: UploadFile = File(...), selecionados: Optional[str] = Form(None),
+                           escolhas: Optional[str] = Form(None)):
+        """Importa o relatório Mcfly: capa dos processos, 'Inscrições processo principal' e 'Somatório inscrições'.
+        `selecionados` (JSON com os nºs conferidos na tela): só esses entram. `escolhas` (JSON nº -> {campo: valor}): valor
+        escolhido pelo analista onde as linhas repetidas divergiam. Sem `selecionados`, importa tudo."""
         _case(cid)
         import io
+        import json as _json
 
         try:
             rows = read_mcfly(io.BytesIO(await file.read()))
+            quais = set(_json.loads(selecionados)) if selecionados else None
+            esc = _json.loads(escolhas) if escolhas else {}
         except Exception as e:  # noqa: BLE001
             raise HTTPException(400, f"Planilha inválida: {e}")
+        novos = atualizados = 0
         for r in rows:
+            if quais is not None and r["numero"] not in quais:
+                continue
+            r.update({k: v for k, v in (esc.get(r["numero"]) or {}).items() if k in MCFLY_MAP and k != "numero"})
+            atual = db.get_process(cid, r["numero"])
+            if atual:  # mantém o que o cadastro já tinha e o Mcfly não trouxe
+                r = {**(atual.get("mcfly") or {}), **{k: v for k, v in r.items() if v not in (None, "")}}
+                atualizados += 1
+            else:
+                novos += 1
             db.upsert_process(cid, r["numero"], r)
-        return {"importados": len(rows)}
+        return {"importados": novos + atualizados, "novos": novos, "atualizados": atualizados}
+
+    @app.post("/api/cases/{cid}/mcfly/preview")
+    async def preview_mcfly(cid: str, file: UploadFile = File(...)):
+        """Conferência antes de importar: linhas repetidas, valores divergentes e processos que parecem não ser do devedor."""
+        from .mcfly import analisar
+        import io
+
+        c = _case(cid)
+        existentes = {p["numero"]: {"oculto": bool(p.get("hidden"))} for p in db.list_processes(cid)}
+        try:
+            return analisar(io.BytesIO(await file.read()), c["nome"], existentes)
+        except Exception as e:  # noqa: BLE001
+            raise HTTPException(400, f"Planilha inválida: {e}")
 
     def _tpl_path(cid: str) -> Path:
         d = s.data_dir / "templates"

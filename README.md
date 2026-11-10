@@ -132,3 +132,12 @@ Limites: um worker só; o índice de busca em memória se perde ao reiniciar (o 
 
 - **Formatos garantidos pelo código** (não dependem da IA): datas em `dd/mm/aaaa`, valores em `R$ 1.234,56` e a coluna *Arquivada 40 LEF?* com a lista `Não` / `< 3 anos` / `> 3 anos` (`ARQUIVADA_40` em `app/schemas.py`). Vale para o que a IA devolve, para o que o analista digita e para a planilha exportada.
 - **`prompts/orientacoes_pgfn.md`:** texto opcional com procedimentos e critérios da PGFN, acrescentado a todos os prompts de extração. Escreva regras curtas (até ~2 páginas); os comentários `<!-- -->` do arquivo não são enviados.
+
+## Relatório Mcfly: inscrições e somatório, com conferência
+
+Botão **📥 Mcfly** na barra da planilha. Envie o .xlsx gerado no Mcfly (SAJ); **nada é importado antes da conferência**:
+
+- **Repetidos:** as linhas do mesmo processo são reunidas em uma. Inscrições diferentes ficam juntas (uma por linha); se o somatório divergir entre as linhas, você escolhe o valor.
+- **De outra parte:** processo em que nenhum polo cita o devedor do caso (pelas palavras do nome do caso; se o nome não ajudar, pela parte mais frequente na planilha) é marcado *outra parte?*. Se também for novo no caso, já vem desmarcado.
+- **Seleção:** marque/desmarque por linha, *Só os que já estão no caso*, ou filtre *só os que pedem atenção*.
+- Os valores preenchem as colunas *Inscrições processo principal* e *Somatório inscrições* (em `R$`) na tela e na planilha exportada; o que o cadastro já tinha e o Mcfly novo não trouxe é mantido.

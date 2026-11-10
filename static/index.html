@@ -49,6 +49,7 @@
         <span class="spacer"></span>
         <span class="pill" id="pill-busy" hidden></span>
         <button class="pill btn-pill" id="btn-med" title="Tokens, páginas enviadas à IA e tempos">📊 Medições</button>
+        <button class="pill btn-pill" id="btn-mcfly" title="Importa o relatório Mcfly (SAJ): inscrições e somatório das inscrições de cada processo">📥 Mcfly</button>
         <button class="pill btn-pill" id="btn-docs">📎 PDFs <span id="docs-n"></span></button>
       </div>
       <div class="filters" id="filters">
@@ -135,6 +136,19 @@
     <h3 class="med-h">Registro de execução (data, hora e segundos)</h3>
     <div class="scroll"><table class="plain" id="med-log"><thead><tr><th>Etapa</th><th>Arquivo / processo</th><th>Início</th><th>Fim</th><th>Duração</th><th>Resultado</th></tr></thead><tbody></tbody></table></div></div>
   <footer><a class="btn" id="med-pdf" href="#" download title="Gera um PDF com estes números">⬇ Baixar relatório (PDF)</a><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
+</form></dialog>
+
+<dialog id="dlg-mcfly" class="wide"><form method="dialog" class="dlg">
+  <header><div><h2>Importar relatório Mcfly</h2><small class="muted">Preenche “Inscrições processo principal” e “Somatório inscrições” (e a capa dos processos)</small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body">
+    <p><input type="file" id="mcfly-file" accept=".xlsx,.xlsm"> <span class="muted">Planilha .xlsx gerada no Mcfly. Nada é importado antes de você conferir.</span></p>
+    <div id="mcfly-sum"></div>
+    <div class="filters" id="mcfly-filtros" hidden style="padding:6px 0"><label class="rev" style="font-size:13px"><input type="checkbox" id="mcfly-so"> mostrar só os que pedem atenção</label><span class="spacer"></span>
+      <button type="button" class="btn sm" id="mcfly-todos">Marcar todos</button><button type="button" class="btn sm" id="mcfly-nenhum">Desmarcar todos</button><button type="button" class="btn sm" id="mcfly-caso">Só os que já estão no caso</button></div>
+    <div class="scroll" style="max-height:46vh"><table class="plain" id="mcfly-tab" hidden><thead><tr><th></th><th>Processo</th><th>Partes</th><th>Inscrições</th><th>Somatório</th><th>Atenção</th></tr></thead><tbody></tbody></table></div>
+    <p class="msg" id="mcfly-msg" role="status"></p>
+  </div>
+  <footer><span class="muted" id="mcfly-count"></span><span class="spacer"></span><button class="btn" value="x">Cancelar</button><button class="btn primary" id="mcfly-ok" type="button" disabled>Importar selecionados</button></footer>
 </form></dialog>
 
 <dialog id="dlg-hist" class="wide"><form method="dialog" class="dlg">

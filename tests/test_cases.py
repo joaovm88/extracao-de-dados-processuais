@@ -138,7 +138,7 @@ def test_case_flow_end_to_end(env):
     c, llm, tmp = env
     case = c.post("/api/cases", json={"nome": "Alfa"}).json()
     r = c.post(f"/api/cases/{case['id']}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx())})
-    assert r.json() == {"importados": 2}
+    assert r.json() == {"importados": 2, "novos": 2, "atualizados": 0}
 
     pdf = tmp / f"{NUM}_V001_001-151-180.pdf"
     make_pdf(pdf, image_page=False)
@@ -1168,3 +1168,45 @@ def test_review_normalizes_typed_date_and_value(env):
     assert f["data_garantia"] == "31/01/2020" and f["valor_garantia"] == "R$ 1.500,00"
     assert c.put(f"{base}/review", json={"fields": {"arquivada_40": "SIM"}, "reviewed": False}).status_code == 400
     assert c.put(f"{base}/review", json={"fields": {"arquivada_40": "> 3 anos"}, "reviewed": False}).status_code == 200
+
+
+def _mcfly_bagunçado():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Mcfly"
+    ws.append(["NÚMERO DO PROCESSO CNJ", "Polo ativo", "Polo passivo", "Classe SAJ", "Inscrições processo principal",
+               "Somatório inscrições (processo principal e vinculados)"])
+    ws.append([NUM, "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 6 05 009561-42", 759527.01])
+    ws.append([NUM, "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 2 05 001111-11", 800000])  # repetido, valores diferentes
+    ws.append(["0000002-00.2020.4.01.0000", "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 6 06 000001-01", 1000.5])
+    ws.append(["0000002-00.2020.4.01.0000", "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 6 06 000001-01", 1000.5])  # idêntico
+    ws.append(["0000003-00.2021.4.01.0000", "FAZENDA NACIONAL", "PADARIA DO JOAO ME", "Execução Fiscal (SIDA)", "60 6 07 000002-02", 50])  # por engano
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_mcfly_preview_flags_repeated_conflicting_and_foreign_processes_and_imports_the_selection(env):
+    c, _, _ = env
+    cid = c.post("/api/cases", json={"nome": "Grupo Ferdil"}).json()["id"]
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})  # NUM já está no caso
+    r = c.post(f"/api/cases/{cid}/mcfly/preview", files={"file": ("x.xlsx", _mcfly_bagunçado(), "application/octet-stream")}).json()
+    assert (r["linhas"], len(r["processos"]), r["repetidos"], r["conflitos"], r["suspeitos"], r["novos"]) == (5, 3, 2, 1, 1, 2)
+    assert r["devedor"] == ["ferdil"] and r["fora_do_mcfly"] == ["0000001-00.2020.4.01.0000"]
+    por = {p["numero"]: p for p in r["processos"]}
+    a, b, estranho = por[NUM], por["0000002-00.2020.4.01.0000"], por["0000003-00.2021.4.01.0000"]
+    assert a["linhas"] == 2 and a["inscricoes"] == "60 6 05 009561-42\n60 2 05 001111-11" and a["no_caso"] and a["marcar"]
+    assert a["conflitos"] == {"somatorio": ["R$ 759.527,01", "R$ 800.000,00"]} and a["somatorio"] == "R$ 759.527,01"
+    assert b["linhas"] == 2 and not b["conflitos"] and b["somatorio"] == "R$ 1.000,50" and b["marcar"] and not b["no_caso"]
+    assert estranho["suspeito"] and not estranho["marcar"]  # novo e de outra parte: vem desmarcado
+    assert r["processos"][0]["numero"] == estranho["numero"]  # suspeitos primeiro
+    imp = c.post(f"/api/cases/{cid}/mcfly", files={"file": ("x.xlsx", _mcfly_bagunçado(), "application/octet-stream")},
+                 data={"selecionados": '["%s", "0000002-00.2020.4.01.0000"]' % NUM, "escolhas": '{"%s": {"somatorio": "R$ 800.000,00"}}' % NUM}).json()
+    assert imp == {"importados": 2, "novos": 1, "atualizados": 1}
+    procs = {p["numero"]: p for p in c.get(f"/api/cases/{cid}").json()["processos"]}
+    assert "0000003-00.2021.4.01.0000" not in procs and procs[NUM]["mcfly"]["somatorio"] == "R$ 800.000,00"
+    assert procs[NUM]["mcfly"]["juizo"] == "02ª Vara - FORMIGA"  # o que o cadastro já tinha e o Mcfly novo não trouxe continua
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    ef = [[x.value for x in row] for row in wb["Execuções Fiscais"].iter_rows()]
+    lin = dict(zip(ef[0], next(l for l in ef if l[0] == NUM)))
+    assert lin["Inscrições processo principal"].startswith("60 6 05 009561-42") and lin["Somatório inscrições (processo principal e vinculados)"] == "R$ 800.000,00"
