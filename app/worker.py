@@ -166,7 +166,7 @@ def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: Searc
     if not case_id:
         return
     for proc in db.list_processes(case_id):
-        if db.pending_docs(case_id, proc["numero"]) or proc.get("manual"):  # feito manualmente: a IA não mexe
+        if db.pending_docs(case_id, proc["numero"]) or proc.get("manual") or proc.get("hidden"):  # manual/oculto: a IA não mexe
             continue
         if proc.get("stale") == 1 and not proc.get("reviewed"):  # processo já revisado só reextrai sob pedido
             extract_process(case_id, proc["numero"], settings, db, store, llm_client)
@@ -221,6 +221,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                 obs, crono = (pje if sistema == "pje" else ev).validar_cronologia(result["fields"].get("observacoes"), evs)
                 result["fields"]["observacoes"] = obs
                 result["cronologia"] = {**crono, "eventos_base": len(evs)}
+                result["fields"]["observacoes"] = ex.format_cronologia(obs)  # devolve a linha em branco entre os atos
             texts = [str(v) for v in result["fields"].values() if v] + list(result["citacoes"].values())
             texts += [str(v) for b in result["bens"] + result["fraudes"] for v in b.values() if v]
             result["citacoes_invalidas"] = ex.check_citations(texts, pages, sistema)
@@ -229,6 +230,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                 f"{NAO_ENCONTRADO}: extração por IA indisponível (nenhuma chave de LLM configurada: GEMINI_API_KEY ou ANTHROPIC_API_KEY).")
         db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema,
                              reviewed=0, error=None, ext_finished_at=time.time(), ext_status="ok")
+        db.add_history(case_id, numero, "Extração pela IA", f"{len(pages)} página(s) lidas", {"result": result, "reviewed": 0})
     except Exception as e:  # noqa: BLE001
         log.exception("falha na extração de %s", numero)
         db.finish_extraction(case_id, numero, error=explain_llm_error(e), ext_finished_at=time.time(), ext_status="erro")

@@ -54,7 +54,7 @@
       <div class="filters" id="filters">
         <div class="search"><span aria-hidden="true">🔎</span><label for="f-q" class="sr">Filtrar linhas</label><input id="f-q" type="search" placeholder="Filtrar por nº, parte, juízo, valor…  ( / )" autocomplete="off"></div>
         <label for="f-st" class="sr">Situação</label>
-        <select id="f-st"><option value="">Todas as situações</option><option value="revisar">A revisar</option><option value="revisado">Revisados</option><option value="erro">Com erro</option><option value="andamento">Em andamento</option><option value="sem_pdf">Sem PDF</option><option value="manual">Feitos manualmente</option></select>
+        <select id="f-st"><option value="">Todas as situações</option><option value="revisar">A revisar</option><option value="revisado">Revisados</option><option value="erro">Com erro</option><option value="andamento">Em andamento</option><option value="sem_pdf">Sem PDF</option><option value="manual">Feitos manualmente</option><option value="sugestoes">Com sugestões a autorizar</option><option value="ocultos">Ocultos</option></select>
         <span class="muted" id="f-count"></span><button class="btn sm" id="f-clear" hidden>Limpar filtro</button><button class="btn sm" id="f-copy" type="button" title="Copia os números dos processos mostrados (um por linha), para colar em outro sistema">⧉ Copiar números</button>
         <span class="spacer"></span>
         <div class="seg" id="dens" role="group" aria-label="Altura das linhas"><button type="button" data-d="compacto" title="Linhas baixas (uma linha de texto)">Compacto</button><button type="button" data-d="normal" title="Altura pelo conteúdo">Normal</button><button type="button" data-d="amplo" title="Mostra mais texto nas células">Amplo</button></div>
@@ -97,9 +97,13 @@
     </div>
     <div class="drop" id="drop" tabindex="0" role="button" aria-label="Arraste PDFs ou clique para escolher">
       <input type="file" id="pdfs" accept="application/pdf" multiple class="sr">
-      <b>Arraste os PDFs aqui</b><span>ou clique para escolher · partes do mesmo processo viram uma só linha</span>
+      <input type="file" id="pasta" webkitdirectory multiple class="sr">
+      <b>Arraste os PDFs ou uma pasta inteira aqui</b><span>ou clique para escolher arquivos · o nº do processo é lido do nome de cada arquivo e as partes viram uma só linha</span>
+      <button type="button" class="btn sm" id="pasta-btn">📁 Escolher pasta</button>
     </div>
+    <p class="muted" id="picked-sum" style="margin:8px 0 4px"></p>
     <ul class="picked" id="picked"></ul>
+    <div class="up-bar" id="up-bar" hidden><i></i></div>
     <p class="msg" id="msg" role="status"></p>
   </div>
   <footer><button class="btn" value="x">Fechar</button><button class="btn primary" id="pdfs-btn" type="button" disabled>Enviar PDFs</button></footer>
@@ -131,6 +135,12 @@
     <h3 class="med-h">Registro de execução (data, hora e segundos)</h3>
     <div class="scroll"><table class="plain" id="med-log"><thead><tr><th>Etapa</th><th>Arquivo / processo</th><th>Início</th><th>Fim</th><th>Duração</th><th>Resultado</th></tr></thead><tbody></tbody></table></div></div>
   <footer><a class="btn" id="med-pdf" href="#" download title="Gera um PDF com estes números">⬇ Baixar relatório (PDF)</a><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
+</form></dialog>
+
+<dialog id="dlg-hist" class="wide"><form method="dialog" class="dlg">
+  <header><div><h2>Histórico do processo</h2><small class="muted" id="hist-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body"><p class="muted">Cada extração, edição, autorização ou restauração guarda uma versão (as 40 mais recentes). Abra uma versão para ver o conteúdo e voltar a ela.</p><div id="hist-list"></div></div>
+  <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
 </form></dialog>
 
 <dialog id="dlg-ev" class="wide"><form method="dialog" class="dlg">

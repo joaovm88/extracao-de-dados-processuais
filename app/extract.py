@@ -5,7 +5,7 @@ from typing import Any, Optional
 
 from .ingest import eventos as ev
 from .ingest.entities import valid_cnpj, valid_cpf
-from .schemas import NAO_ENCONTRADO, SHEETS, Sheet
+from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, NAO_ENCONTRADO, SHEETS, Sheet
 
 PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"
 
@@ -35,12 +35,27 @@ def tool_schema(sheet: Sheet) -> dict:
         if f.options:
             p["enum"] = [*f.options, None]
         props[f.key] = p
-    props["bens"] = {"type": "array", "description": "Imóveis/veículos dados em garantia, penhorados ou avaliados nos autos. Um item por ato registral relevante (R./Av.).",
-                     "items": {"type": "object", "properties": {k: {"type": ["string", "null"]} for k in (
-                         "matricula", "caracteristicas", "proprietario", "ato", "gravames", "resumo", "situacao")}}}
-    props["fraudes"] = {"type": "array", "description": "Somente quando o procurador alegou fraude E o juiz deferiu/analisou o pedido.",
-                        "items": {"type": "object", "properties": {k: {"type": ["string", "null"]} for k in (
-                            "tipo", "analise", "valor_causa")}}}
+    props["bens"] = {"type": "array", "description": (
+        "SOMENTE imóveis (matrículas) para os quais os autos trazem o AUTO/TERMO DE PENHORA e/ou o REGISTRO da penhora na matrícula. "
+        "Um item por ato registral da matrícula (R./Av.), repetindo 'matricula' em todos os itens do mesmo imóvel. Sem auto de penhora nem registro, devolva lista vazia."),
+                     "items": {"type": "object", "properties": {
+                         "matricula": {"type": ["string", "null"], "description": "Nº da matrícula e cartório, ex.: '28.749 (Registro de Imóveis de Formiga - MG)'"},
+                         "caracteristicas": {"type": ["string", "null"], "description": "Descrição do imóvel (área, local)"},
+                         "proprietario": {"type": ["string", "null"], "description": "Nome e CNPJ/CPF"},
+                         "ato": {"type": ["string", "null"], "description": "Ex.: 'R-14', 'Av-07'"},
+                         "gravames": {"type": ["string", "null"], "description": "Ex.: 'Penhora', 'Hipoteca de 1º Grau', 'Compra e Venda'"},
+                         "resumo": {"type": ["string", "null"], "description": "Credor/processo, juízo e valor do ato"},
+                         "situacao": {"type": ["string", "null"], "description": "'Ativo' ou 'Cancelado (Av. X)'"},
+                         "citacao": {"type": ["string", "null"], "description": "Rótulo do trecho onde está o auto de penhora ou o registro"}}}}
+    props["fraudes"] = {"type": "array", "description": (
+        "Alegações de fraude feitas pela Fazenda/procurador nos autos (fraude à execução, simulação, fraude patrimonial, sucessão de fato, "
+        "desconsideração por fraude), com o resultado da análise do juiz. Sem alegação de fraude, devolva lista vazia."),
+                        "items": {"type": "object", "properties": {
+                            "tipo": {"type": ["string", "null"], "enum": [*FRAUDE_TIPOS, None]},
+                            "analise": {"type": ["string", "null"], "enum": [*FRAUDE_ANALISES, None], "description": "Resultado do pedido"},
+                            "valor_causa": {"type": ["string", "null"], "description": "Valor da causa (R$), se constar"},
+                            "resumo": {"type": ["string", "null"], "description": "Uma frase: quem alegou o quê e o que o juiz decidiu"},
+                            "citacao": {"type": ["string", "null"], "description": "Rótulo do trecho da alegação ou da decisão"}}}}
     props["citacoes"] = {"type": "array", "description": "Para cada campo preenchido, a citação de onde veio (ex.: 'Evento 14, pg. 1, ID 6000006508').",
                          "items": {"type": "object", "properties": {"campo": {"type": "string"}, "citacao": {"type": "string"}},
                                    "required": ["campo", "citacao"]}}
@@ -218,12 +233,38 @@ def validate(sheet: Sheet, data: dict) -> dict:
     if "corresponsaveis" in data:
         data["corresponsaveis"] = format_corresponsaveis(data.get("corresponsaveis"))
     data["_revisar"] = review
-    data["bens"] = data.get("bens") or []
-    data["fraudes"] = data.get("fraudes") or []
+    data["bens"] = [{**b, "_st": "sugerido"} for b in (data.get("bens") or []) if isinstance(b, dict) and any(b.values())]
+    data["fraudes"] = [{**normalize_fraude(f), "_st": "sugerido"} for f in (data.get("fraudes") or []) if isinstance(f, dict) and any(f.values())]
     cit = data.get("citacoes") or []
     data["citacoes"] = ({c["campo"]: c["citacao"] for c in cit if isinstance(c, dict) and "campo" in c and "citacao" in c}
                         if isinstance(cit, list) else dict(cit))
     return data
+
+
+def _sem_acento(t) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", str(t or "")) if unicodedata.category(c) != "Mn").upper().strip()
+
+
+def normalize_fraude(item: dict) -> dict:
+    """Encaixa 'tipo' e 'analise' nas listas fechadas da planilha (aceita variação de acento/caixa). Tipo desconhecido vira
+    'OUTRAS FRAUDES' (o texto original vai para o resumo); análise desconhecida fica vazia para o analista escolher."""
+    out = dict(item)
+    tipos = {_sem_acento(t): t for t in FRAUDE_TIPOS}
+    t = _sem_acento(out.get("tipo"))
+    if t and t not in tipos:
+        achado = next((v for k, v in tipos.items() if k in t or t in k), None)
+        if not achado:
+            out["resumo"] = f"{out.get('tipo')}. {out.get('resumo') or ''}".strip()
+        out["tipo"] = achado or "OUTRAS FRAUDES"
+    elif t:
+        out["tipo"] = tipos[t]
+    analises = {_sem_acento(a): a for a in FRAUDE_ANALISES}
+    a = _sem_acento(out.get("analise"))
+    if a:
+        out["analise"] = analises.get(a) or next((v for k, v in analises.items() if a.startswith(k[:6]) and "PARCIAL" not in a), None) \
+            or ("PARCIALMENTE DEFERIDO" if "PARCIAL" in a else None)
+    return out
 
 
 def get_sheet(key: str) -> Sheet:
@@ -317,7 +358,7 @@ def format_cronologia(value) -> Optional[str]:
     for l in atual:
         l = re.sub(r"\s*[–—]\s*", " - ", l) if _ATO.match(l) else l
         out.append(re.sub(r"\s+", " ", l).strip().rstrip(";"))
-    return "\n".join(x for x in out if x)
+    return "\n\n".join(x for x in out if x)  # um ato por linha, com uma linha em branco entre eles (leitura mais fácil)
 
 
 def format_corresponsaveis(value) -> Optional[str]:

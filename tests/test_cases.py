@@ -175,8 +175,15 @@ def test_case_flow_end_to_end(env):
     # processo do Mcfly sem PDF entra como não digitalizado, na aba da sua classe
     oa = [[c_.value for c_ in r] for r in wb["Outras Ações"].iter_rows()]
     assert oa[1][0] == "0000001-00.2020.4.01.0000" and oa[1][6] == "NÃO"
-    assert wb["Outros Bens"].cell(2, 1).value == "28.749"
+    assert wb["Outros Bens"].cell(2, 1).value is None  # o bem é só uma SUGESTÃO da IA: não vai à planilha sem autorização
+    assert hdr[-2:] == ["Nº de ordem", "Situação da análise"] and ef[1][-2:] == [1, "Revisado"]
     assert wb["Relatório"].max_row == 3
+    # o analista autoriza -> a aba Outros Bens é preenchida
+    sheet = c.get(f"/api/cases/{case['id']}/sheet").json()
+    assert sheet["bens"][0]["_st"] == "sugerido" and next(a for a in sheet["abas"] if a["key"] == "bens")["pendentes"] == 1
+    assert c.put(f"/api/cases/{case['id']}/processes/{NUM}/itens", json={"lista": "bens", "acao": "autorizar"}).json()["alterados"] == 1
+    wb2 = load_workbook(io.BytesIO(c.get(f"/api/cases/{case['id']}/spreadsheet").content))
+    assert wb2["Outros Bens"].cell(2, 1).value == "28.749"
 
 
 def test_without_llm_key_is_flagged(tmp_path, monkeypatch):
@@ -938,7 +945,8 @@ def test_other_prompts_are_chronology_only_like_the_execution_prompt(nome):
 
 def test_format_cronologia_one_act_per_line():
     t = "- Evento 1, pg. 1 – 12/03/2012 – Ajuizada. Evento 5, pg. 2 - 20/04/2012 - Citação;\n2. Evento 9 - 01/01/2013 - Sentença que\njulga procedente."
-    assert ex.format_cronologia(t).split("\n") == [
+    assert "\n\n" in ex.format_cronologia(t) and ex.format_cronologia(ex.format_cronologia(t)) == ex.format_cronologia(t)
+    assert [x for x in ex.format_cronologia(t).split("\n") if x] == [
         "Evento 1, pg. 1 - 12/03/2012 - Ajuizada.", "Evento 5, pg. 2 - 20/04/2012 - Citação",
         "Evento 9 - 01/01/2013 - Sentença que julga procedente."]
     assert ex.format_cronologia("Não informado no extrato") == "Não informado no extrato" and ex.format_cronologia(None) is None
@@ -994,3 +1002,118 @@ def test_medicoes_pdf_endpoint_returns_a_pdf_without_the_word_caso_in_the_title(
     assert "Medições do caso" not in texto
     assert "Medições do caso" not in open("static/index.html", encoding="utf-8").read()
     assert c.get("/api/cases/inexistente/medicoes.pdf").status_code == 404
+
+
+def _caso_com_pdf(c, tmp, nome="H"):
+    cid = c.post("/api/cases", json={"nome": nome}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    return cid, d
+
+
+def test_history_records_versions_and_restores_a_previous_one(env):
+    c, _, tmp = env
+    cid, _ = _caso_com_pdf(c, tmp)
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    v0 = c.get(f"{base}/history").json()["versoes"]
+    assert [v["origem"] for v in v0] == ["Extração pela IA"]
+    original = c.get(base).json()["result"]["fields"]["observacoes"]
+    assert c.put(f"{base}/review", json={"observacoes": "Primeira edição", "reviewed": False}).status_code == 200
+    assert c.put(f"{base}/review", json={"observacoes": "Primeira edição", "reviewed": False}).status_code == 200  # sem mudança: não cria versão
+    c.put(f"{base}/review", json={"observacoes": "Texto do analista", "reviewed": True})
+    vs = c.get(f"{base}/history").json()["versoes"]
+    assert len(vs) == 3 and vs[0]["origem"] == "Edição do analista" and "Observações" in vs[0]["resumo"] and "revisado" in vs[0]["resumo"]
+    det = c.get(f"{base}/history/{vs[-1]['id']}").json()
+    assert any(x["titulo"].startswith("Observações") for x in det["campos"]) and det["reviewed"] is False
+    assert c.post(f"{base}/history/{vs[-1]['id']}/restore").status_code == 200  # volta à extração original
+    p = c.get(base).json()
+    assert p["result"]["fields"]["observacoes"] == original and p["reviewed"] == 0
+    assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Restauração"
+    assert c.post(f"{base}/history/nao-existe/restore").status_code == 404
+
+
+def test_hide_and_delete_a_single_process(env):
+    c, _, tmp = env
+    cid, d = _caso_com_pdf(c, tmp)
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    assert c.put(f"{base}/hidden", json={"oculto": True}).status_code == 200
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    assert next(l for l in sheet["linhas"] if l["numero"] == NUM)["oculto"] is True
+    aba = next(l for l in sheet["linhas"] if l["numero"] == NUM)["aba"]
+    nome = {"execucoes_fiscais": "Execuções Fiscais", "outras_acoes": "Outras Ações"}[aba]
+    visiveis = next(a for a in sheet["abas"] if a["key"] == aba)["n"]
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    linhas_oculto = wb[nome].max_row
+    assert wb["Relatório"].max_row == 2 and NUM not in [r[0].value for r in wb[nome].iter_rows()]  # o oculto não vai à planilha
+    c.put(f"{base}/hidden", json={"oculto": False})
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    assert wb[nome].max_row == linhas_oculto + 1 and wb["Relatório"].max_row == 3
+    assert next(a for a in c.get(f"/api/cases/{cid}/sheet").json()["abas"] if a["key"] == aba)["n"] == visiveis + 1
+    r = c.delete(base)
+    assert r.status_code == 200 and r.json()["documentos"] == 1
+    assert c.get(base).status_code == 404 and c.get(f"/api/documents/{d['id']}").status_code == 404
+    assert c.get(f"{base}/history").status_code == 404 and c.delete(base).status_code == 404
+    assert len(c.get(f"/api/cases/{cid}").json()["processos"]) == 1  # o outro processo do caso continua
+
+
+def test_fraud_items_are_suggestions_until_the_analyst_authorizes(env):
+    c, llm, tmp = env
+    llm.payload["fraudes"] = [{"tipo": "fraude a execucao", "analise": "deferido", "valor_causa": None, "resumo": "PGFN alegou; juiz deferiu", "citacao": "VOL 001, pg. 2"},
+                              {"tipo": "blindagem societária", "analise": "talvez"}]
+    cid, _ = _caso_com_pdf(c, tmp)
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    fr = sheet["fraudes"]
+    assert [f["tipo"] for f in fr] == ["FRAUDE À EXECUÇÃO", "OUTRAS FRAUDES"] and fr[0]["analise"] == "DEFERIDO" and fr[1]["analise"] is None
+    assert all(f["_st"] == "sugerido" for f in fr) and fr[0]["classe"] == "Execução Fiscal (SIDA)" and "blindagem" in fr[1]["resumo"]
+    assert sheet["listas"]["fraude_tipo"][0] == "FRAUDE À EXECUÇÃO" and next(l for l in sheet["linhas"] if l["numero"] == NUM)["sugestoes"] == 3
+    aba = lambda: load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))["Alegações de Fraude"]
+    assert aba().max_row == 1  # nada vai à planilha sem autorização
+    assert c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "editar", "indices": [1], "valores": {"tipo": "INVENTADO"}}).status_code == 400
+    assert c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "editar", "indices": [1], "valores": {"tipo": "SIMULAÇÃO", "analise": "INDEFERIDO"}}).status_code == 200
+    c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "autorizar", "indices": [0]})
+    c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "descartar", "indices": [1]})
+    ws = aba()
+    assert ws.max_row == 2 and [x.value for x in ws[2]][:4] == [NUM, "Execução Fiscal (SIDA)", "FRAUDE À EXECUÇÃO", "DEFERIDO"]
+    depois = c.get(f"/api/cases/{cid}/sheet").json()
+    assert [f["_st"] for f in depois["fraudes"]] == ["autorizado"]  # o descartado some da aba
+    assert next(a for a in depois["abas"] if a["key"] == "fraude")["n"] == 1
+    assert c.put(f"{base}/itens", json={"lista": "x", "acao": "autorizar"}).status_code == 400
+
+
+def test_bens_export_shows_matricula_only_on_the_first_row_of_each_property():
+    from app.template import item_row
+    p = {"numero": NUM, "mcfly": {}}
+    a = {"matricula": "28.749 (CRI Formiga)", "caracteristicas": "Gleba", "proprietario": "Alfa", "ato": "R-14", "gravames": "Penhora", "_st": "autorizado", "citacao": "x"}
+    b = {**a, "ato": "R-15"}
+    assert item_row("bens", p, a)["matricula"].startswith("28.749") and "citacao" not in item_row("bens", p, a)
+    segunda = item_row("bens", p, b, a)
+    assert "matricula" not in segunda and "proprietario" not in segunda and segunda["ato"] == "R-15"
+
+
+def test_template_optional_columns_get_order_number_and_analysis_status():
+    from app import template as tpl
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Execuções Fiscais"
+    ws.append(["Nº", "Número do processo judicial", "EXIT. GARANTIA", "Situação da análise"])
+    ws.append([None, NUM, None, None])
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert "dicas" not in tpl.analyze(buf.getvalue()) or not tpl.analyze(buf.getvalue())["dicas"]
+    procs = [{"numero": NUM, "mcfly": {"classe": "Execução Fiscal"}, "manual": 1, "manual_note": "no SAJ", "result": None},
+             {"numero": "0000009-99.2020.4.01.3811", "mcfly": {"classe": "Execução Fiscal"}, "reviewed": 1,
+              "result": {"sheet": "execucoes_fiscais", "fields": {"garantia": "IMÓVEL"}, "bens": [], "fraudes": []}}]
+    out = load_workbook(io.BytesIO(tpl.fill(buf.getvalue(), procs)))["Execuções Fiscais"]
+    assert [c.value for c in out[2]] == [1, NUM, None, "Feito manualmente. no SAJ"]
+    assert [c.value for c in out[3]] == [2, "0000009-99.2020.4.01.3811", "IMÓVEL", "Revisado"]
+    # modelo sem as colunas: a análise avisa que elas são opcionais
+    wb2 = Workbook()
+    wb2.active.title = "Execuções Fiscais"
+    wb2.active.append(["Número do processo judicial", "EXIT. GARANTIA"])
+    b2 = io.BytesIO()
+    wb2.save(b2)
+    assert "Situação da análise" in tpl.analyze(b2.getvalue())["dicas"][0]

@@ -42,6 +42,17 @@ class TextIn(BaseModel):
     texto: str
 
 
+class HiddenIn(BaseModel):
+    oculto: bool
+
+
+class ItensIn(BaseModel):
+    lista: str  # "bens" | "fraudes"
+    acao: str  # "autorizar" | "descartar" | "sugerir" | "editar"
+    indices: Optional[list[int]] = None  # None = todos os que estão como sugestão
+    valores: Optional[dict] = None  # só para "editar" (um índice)
+
+
 class ManualIn(BaseModel):
     manual: bool
     nota: Optional[str] = None
@@ -253,22 +264,136 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(404, "Processo sem extração para revisar.")
         res = p["result"]
         sheet = SHEETS[res["sheet"]]
+        _baseline(cid, numero, p)
+        mudou: list[str] = []
         for k, v in (body.fields or {}).items():
             f = next((x for x in sheet.fields if x.key == k), None)
             if f is None:
                 raise HTTPException(400, f"Campo desconhecido: {k}")
             if f.options and v is not None and v not in f.options:
                 raise HTTPException(400, f"Valor inválido para '{f.header}'. Permitidos: {', '.join(f.options)}")
+            if res["fields"].get(k) != v:
+                mudou.append(f.header.split("(")[0].strip()[:40])
             res["fields"][k] = v
         if body.observacoes is not None:
+            if (res["fields"].get("observacoes") or "") != body.observacoes:
+                mudou.append("Observações")
             res["fields"]["observacoes"] = body.observacoes
             res.pop("cronologia", None)  # a conferência valia para o texto da IA; o analista passou a ser o autor
         if body.bens is not None:
             res["bens"] = body.bens
         if body.fraudes is not None:
             res["fraudes"] = body.fraudes
+        if bool(p.get("reviewed")) != bool(body.reviewed):
+            mudou.append("marcado como revisado" if body.reviewed else "voltou para “a revisar”")
         db.update_process(cid, numero, result=res, reviewed=int(body.reviewed))
+        if mudou:
+            db.add_history(cid, numero, "Edição do analista", "; ".join(mudou), {"result": res, "reviewed": int(body.reviewed)})
         return {"ok": True}
+
+    def _baseline(cid: str, numero: str, p: dict) -> None:
+        """Processos anteriores ao histórico: guarda o estado atual antes da primeira mudança, para dar para voltar."""
+        if p.get("result") and not db.list_history(cid, numero):
+            db.add_history(cid, numero, "Estado anterior", "como estava antes de o histórico existir",
+                           {"result": p["result"], "reviewed": int(p.get("reviewed") or 0)})
+
+    @app.get("/api/cases/{cid}/processes/{numero}/history")
+    def history(cid: str, numero: str):
+        if not db.get_process(cid, numero):
+            raise HTTPException(404, "Processo não encontrado.")
+        return {"versoes": db.list_history(cid, numero)}
+
+    @app.get("/api/cases/{cid}/processes/{numero}/history/{hid}")
+    def history_item(cid: str, numero: str, hid: str):
+        h = db.get_history(cid, numero, hid)
+        if not h:
+            raise HTTPException(404, "Versão não encontrada.")
+        res = h["snapshot"].get("result") or {}
+        sheet = SHEETS.get(res.get("sheet") or "")
+        titulos = {f.key: f.header for f in sheet.fields} if sheet else {}
+        return {**{k: h[k] for k in ("id", "at", "origem", "resumo")}, "reviewed": bool(h["snapshot"].get("reviewed")),
+                "campos": [{"titulo": titulos.get(k, k), "valor": v} for k, v in (res.get("fields") or {}).items() if v not in (None, "")],
+                "bens": len(res.get("bens") or []), "fraudes": len(res.get("fraudes") or [])}
+
+    @app.post("/api/cases/{cid}/processes/{numero}/history/{hid}/restore")
+    def history_restore(cid: str, numero: str, hid: str):
+        """Volta o processo a uma versão anterior (a versão atual continua no histórico)."""
+        p = db.get_process(cid, numero)
+        h = db.get_history(cid, numero, hid)
+        if not p or not h or not h["snapshot"].get("result"):
+            raise HTTPException(404, "Versão não encontrada.")
+        if p.get("manual"):
+            raise HTTPException(409, "Processo marcado como feito manualmente. Desfaça a marcação antes de restaurar uma versão.")
+        _baseline(cid, numero, p)
+        snap = h["snapshot"]
+        db.update_process(cid, numero, result=snap["result"], reviewed=int(snap.get("reviewed") or 0), error=None)
+        quando = time.strftime("%d/%m/%Y %H:%M", time.localtime(h["at"]))
+        db.add_history(cid, numero, "Restauração", f"voltou à versão “{h['origem']}” de {quando}", snap)
+        return {"ok": True}
+
+    @app.put("/api/cases/{cid}/processes/{numero}/itens")
+    def itens(cid: str, numero: str, body: ItensIn):
+        """Outros Bens / Alegações de Fraude: a IA sugere, o analista autoriza (só o autorizado vai para as abas e a planilha)."""
+        from .extract import normalize_fraude
+        from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, item_status
+
+        p = db.get_process(cid, numero)
+        if not p or not p.get("result"):
+            raise HTTPException(404, "Processo sem extração.")
+        if body.lista not in ("bens", "fraudes") or body.acao not in ("autorizar", "descartar", "sugerir", "editar"):
+            raise HTTPException(400, "Use lista 'bens' ou 'fraudes' e ação 'autorizar', 'descartar', 'sugerir' ou 'editar'.")
+        res = p["result"]
+        lista = res.get(body.lista) or []
+        idx = body.indices if body.indices is not None else [i for i, it in enumerate(lista) if item_status(it) == "sugerido"]
+        if any(i < 0 or i >= len(lista) for i in idx):
+            raise HTTPException(400, "Item inexistente.")
+        _baseline(cid, numero, p)
+        if body.acao == "editar":
+            if len(idx) != 1 or not body.valores:
+                raise HTTPException(400, "Para editar, informe um item e os valores.")
+            permitidos = ("tipo", "analise", "valor_causa") if body.lista == "fraudes" else (
+                "matricula", "caracteristicas", "proprietario", "ato", "gravames", "resumo", "situacao")
+            novo = {k: (str(v).strip() or None) if v is not None else None for k, v in body.valores.items() if k in permitidos}
+            if body.lista == "fraudes":
+                if novo.get("tipo") and novo["tipo"] not in FRAUDE_TIPOS:
+                    raise HTTPException(400, f"Tipo de fraude inválido. Permitidos: {', '.join(FRAUDE_TIPOS)}")
+                if novo.get("analise") and novo["analise"] not in FRAUDE_ANALISES:
+                    raise HTTPException(400, f"Análise inválida. Permitidos: {', '.join(FRAUDE_ANALISES)}")
+            lista[idx[0]] = {**lista[idx[0]], **novo}
+            resumo = "item editado"
+        else:
+            st = {"autorizar": "autorizado", "descartar": "descartado", "sugerir": "sugerido"}[body.acao]
+            for i in idx:
+                lista[i] = {**(normalize_fraude(lista[i]) if body.lista == "fraudes" else lista[i]), "_st": st}
+            resumo = f"{len(idx)} item(ns): {st}"
+        res[body.lista] = lista
+        db.update_process(cid, numero, result=res)
+        nome = "Outros Bens" if body.lista == "bens" else "Alegações de Fraude"
+        if idx:
+            db.add_history(cid, numero, f"{nome}", resumo, {"result": res, "reviewed": int(p.get("reviewed") or 0)})
+        return {"ok": True, "alterados": len(idx)}
+
+    @app.put("/api/cases/{cid}/processes/{numero}/hidden")
+    def set_hidden(cid: str, numero: str, body: HiddenIn):
+        """Oculta (ou reexibe) um processo: ele sai da tabela e da planilha exportada, sem apagar nada."""
+        if not db.get_process(cid, numero):
+            raise HTTPException(404, "Processo não encontrado.")
+        db.update_process(cid, numero, hidden=int(body.oculto))
+        if not body.oculto:
+            queue.enqueue(f"{READY_PREFIX}{cid}")  # se havia material novo esperando, extrai agora
+        return {"ok": True, "oculto": body.oculto}
+
+    @app.delete("/api/cases/{cid}/processes/{numero}")
+    def delete_process(cid: str, numero: str):
+        """Exclui o processo do caso, com os seus PDFs e o histórico. Não tem volta. Se o processo constar da planilha-modelo,
+        ele volta (vazio) quando o modelo for enviado de novo."""
+        if not db.get_process(cid, numero):
+            raise HTTPException(404, "Processo não encontrado.")
+        docs = [d for d in db.list(cid) if d["numero_processo"] == numero]
+        for d in docs:
+            _remove_doc(d)
+        db.delete_process(cid, numero)
+        return {"status": "deleted", "documentos": len(docs)}
 
     @app.put("/api/cases/{cid}/processes/{numero}/manual")
     def set_manual(cid: str, numero: str, body: ManualIn):

@@ -92,6 +92,15 @@ RELATORIO_HEADERS = ["Número do Processo CNJ", "Polo Ativo", "Polo Passivo", "C
 BENS_HEADERS = ["Matrícula", "Características do Imóvel", "Proprietário", "Ato (Nº R./Av.)", "Gravames",
                 "Resumo ", "Situação (Ativo/Cancelado pela Av. X)"]
 FRAUDE_HEADERS = ["NÚMERO DO PROCESSO", "CLASSE PROCESSUAL", "TIPO DE FRAUDE ALEGADA", "ANÁLISE DO PEDIDO", "VALOR DA CAUSA"]
+# Listas fechadas da aba "Alegações de Fraude" (iguais às da planilha do analista)
+FRAUDE_TIPOS = ["FRAUDE À EXECUÇÃO", "SIMULAÇÃO", "PATRIMONIAL", "SUCESSÃO DE FATO", "OUTRAS FRAUDES"]
+FRAUDE_ANALISES = ["DEFERIDO", "INDEFERIDO", "PARCIALMENTE DEFERIDO", "PENDENTE DE ANÁLISE"]
+# Colunas opcionais que o modelo do analista pode ter nas abas de processos (cabeçalho normalizado -> chave)
+EXTRA_COLS = {"n": "ordem", "no": "ordem", "n o": "ordem", "ordem": "ordem", "item": "ordem", "seq": "ordem", "sequencia": "ordem",
+              "numero de ordem": "ordem", "n de ordem": "ordem", "no de ordem": "ordem",
+              "situacao da analise": "situacao_analise", "status da analise": "situacao_analise", "analise manual": "situacao_analise",
+              "feito manualmente": "situacao_analise", "forma de analise": "situacao_analise"}
+ORDEM_HEADER, SITUACAO_HEADER = "Nº de ordem", "Situação da análise"
 DJE_SIEF_HEADERS = ["DEVEDOR", "CPF/CNPJ", "N. PROCESSO JUDICIAL", "REFERÊNCIA", "CÓDIGO DE RECEITA",
                     "VALOR DISPONÍVEL", "Valor total no processo"]
 
@@ -138,3 +147,25 @@ def manual_text(proc: dict) -> str:
     """Texto que a planilha mostra no campo de observações de um processo feito manualmente."""
     nota = (proc.get("manual_note") or "").strip()
     return "Processo analisado manualmente." + (f" {nota}" if nota else "")
+
+
+def situacao_analise(proc: dict) -> str:
+    """Texto da coluna 'Situação da análise' na planilha exportada."""
+    if proc.get("manual"):
+        return manual_text(proc).replace("Processo analisado manualmente", "Feito manualmente")
+    if not proc.get("result"):
+        return ""
+    return "Revisado" if proc.get("reviewed") else "A revisar (extraído pela IA)"
+
+
+def item_status(item: dict) -> str:
+    """Itens de Outros Bens / Alegações de Fraude: 'sugerido' (IA), 'autorizado' (analista) ou 'descartado'."""
+    st = item.get("_st")
+    return st if st in ("sugerido", "autorizado", "descartado") else "sugerido"
+
+
+def itens_autorizados(proc: dict, lista: str) -> list[dict]:
+    """Só o que o analista autorizou vai para as abas da planilha. Processo feito manualmente ou oculto não leva itens."""
+    if proc.get("manual") or proc.get("hidden"):
+        return []
+    return [i for i in ((proc.get("result") or {}).get(lista) or []) if item_status(i) == "autorizado"]

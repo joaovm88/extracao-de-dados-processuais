@@ -117,7 +117,7 @@ function renderAll() { renderTabs(); renderGrid(); renderToolbar(); renderAssist
 
 /* ---------- abas, barra de ferramentas, banners ---------- */
 function renderTabs() {
-  $('tabs').innerHTML = data.abas.map(a => `<button role="tab" data-a="${a.key}" class="${a.key === aba ? 'on' : ''}" aria-selected="${a.key === aba}">${esc(a.titulo)}<b>${a.n}</b></button>`).join('');
+  $('tabs').innerHTML = data.abas.map(a => `<button role="tab" data-a="${a.key}" class="${a.key === aba ? 'on' : ''}" aria-selected="${a.key === aba}">${esc(a.titulo)}<b>${a.n}</b>${a.pendentes ? `<i class="pend-dot" title="${a.pendentes} sugestão(ões) da IA aguardando a sua autorização">${a.pendentes}</i>` : ''}</button>`).join('');
   document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => { aba = b.dataset.a; renderTabs(); renderGrid(); });
 }
 function renderToolbar() {
@@ -134,9 +134,11 @@ function renderToolbar() {
 
 /* ---------- filtro das linhas ---------- */
 function passa(l) {
+  if (filtro.st === 'ocultos') return l.oculto && (() => { const t = norm(filtro.q).split(/\s+/).filter(Boolean); return t.every(x => norm(`${l.numero} ${Object.values(l.valores).join(' ')}`).includes(x)); })();
+  if (l.oculto) return false;  // ocultos só aparecem no filtro "Ocultos"
   if (filtro.st) {
     const ed = editable(l), ok = {revisar: ed && !l.reviewed, revisado: ed && l.reviewed, erro: l.estado === 'erro',
-      andamento: ['extraindo', 'aguardando'].includes(l.estado) || l.docs.some(d => ['queued', 'processing'].includes(d.status)), sem_pdf: l.estado === 'sem_pdf', manual: l.estado === 'manual'}[filtro.st];
+      andamento: ['extraindo', 'aguardando'].includes(l.estado) || l.docs.some(d => ['queued', 'processing'].includes(d.status)), sem_pdf: l.estado === 'sem_pdf', manual: l.estado === 'manual', sugestoes: l.sugestoes > 0}[filtro.st];
     if (!ok) return false;
   }
   const termos = norm(filtro.q).split(/\s+/).filter(Boolean); if (!termos.length) return true;
@@ -167,16 +169,28 @@ function gridHead(keys, heads) {  // <colgroup> com as larguras + cabeçalho com
 function renderGrid() {
   const a = data.abas.find(x => x.key === aba), table = $('grid');
   const todas = data.linhas.filter(l => l.aba === aba), linhas = todas.filter(passa);
-  $('grid-empty').hidden = true; applyDens();
+  $('grid-empty').hidden = true; $('grid-empty').className = 'grid-empty'; applyDens();
   if (aba === 'bens' || aba === 'fraude') {
-    const todos = aba === 'bens' ? data.bens : data.fraudes, items = todos.filter(passaItem); updateFilterUI(items.length, todos.length);
-    table.innerHTML = gridHead(['__first', ...a.colunas.map(c => c.key)], [{text: 'Processo'}, ...a.colunas.map(c => ({text: c.titulo}))]) + `<tbody>${items.map(i =>
-      `<tr><td class="first"><div class="cc"><div class="numrow"><span class="idx">${items.indexOf(i) + 1}</span><span class="num">${esc(i.numero)}</span><button type="button" class="copy" data-copy="${esc(i.numero)}" title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button></div></div></td>${a.colunas.map(c => `<td class="c ro"><div class="cc">${esc(i[c.key] ?? '')}</div></td>`).join('')}</tr>`).join('')}</tbody>`;
-    if (!items.length) emptyGrid(todos.length ? 'Nenhum item corresponde ao filtro' : aba === 'bens' ? 'Nenhum bem extraído ainda' : 'Nenhuma alegação de fraude', todos.length ? 'Ajuste ou limpe o filtro acima.' : 'Os itens aparecem aqui quando a IA os encontra nos processos. Esta aba é somente leitura.');
+    const lista = aba === 'bens' ? 'bens' : 'fraudes', todos = aba === 'bens' ? data.bens : data.fraudes, items = todos.filter(passaItem); updateFilterUI(items.length, todos.length);
+    const pend = items.filter(i => i._st === 'sugerido').length, ST = {sugerido: ['blue', 'sugestão da IA'], autorizado: ['ok', 'autorizado']};
+    table.innerHTML = gridHead(['__first', ...a.colunas.map(c => c.key), '__st'], [{text: 'Processo'}, ...a.colunas.map(c => ({text: c.titulo})), {text: 'Situação'}]) + `<tbody>${items.map((i, k) => {
+      const [sc, stx] = ST[i._st] || ['', i._st], sug = i._st === 'sugerido';
+      const cel = c => aba === 'fraude' && sug && (c.key === 'tipo' || c.key === 'analise')
+        ? `<td><div class="cc"><select data-item-k="${c.key}"><option value=""></option>${data.listas[c.key === 'tipo' ? 'fraude_tipo' : 'fraude_analise'].map(o => `<option ${o === i[c.key] ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select></div></td>`
+        : `<td class="c ro"><div class="cc">${esc(i[c.key] ?? '')}</div></td>`;
+      return `<tr data-item="${lista}|${esc(i.numero)}|${i._i}" class="${sug ? 'pend' : 'okrow'}"><td class="first"><div class="cc"><div class="numrow"><span class="idx">${k + 1}</span><span class="num">${esc(i.numero)}</span><button type="button" class="copy" data-copy="${esc(i.numero)}" title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button></div>
+        ${i.resumo && aba === 'fraude' ? `<div class="muted item-res">${esc(i.resumo)}</div>` : ''}${i.citacao ? `<div class="muted item-res">Origem: ${esc(i.citacao)}</div>` : ''}</div></td>
+        ${a.colunas.map(cel).join('')}
+        <td><div class="cc item-acts"><span class="tag ${sc}">${stx}</span>${sug ? '<button type="button" class="btn sm primary" data-item-act="autorizar" title="Envia este item para a planilha">✓ Autorizar</button><button type="button" class="btn sm" data-item-act="descartar" title="Não é o caso: tira da lista">✕ Descartar</button>'
+          : '<button type="button" class="btn sm" data-item-act="sugerir" title="Volta a ser uma sugestão (sai da planilha)">Desfazer</button>'}</div></td></tr>`; }).join('')}</tbody>`;
+    if (!items.length) emptyGrid(todos.length ? 'Nenhum item corresponde ao filtro' : aba === 'bens' ? 'Nenhum imóvel com auto de penhora ou registro encontrado ainda' : 'Nenhuma alegação de fraude encontrada ainda',
+      todos.length ? 'Ajuste ou limpe o filtro acima.' : 'Quando a IA reconhece ' + (aba === 'bens' ? 'um imóvel (matrícula) com auto de penhora e registro' : 'uma alegação de fraude') + ' num processo, o item aparece aqui como sugestão. Só entra na planilha depois que você autorizar.');
+    else if (pend) { const g = $('grid-empty'); g.hidden = false; g.className = 'grid-empty bar'; g.innerHTML = `<b>${pend} sugestão(ões) da IA aguardando a sua autorização.</b> Só o que for autorizado vai para a planilha exportada. <button type="button" class="btn sm primary" id="aut-todos">✓ Autorizar todas as ${pend}</button>`;
+      $('aut-todos').onclick = () => autorizarTodos(lista, items.filter(i => i._st === 'sugerido')); }
     return;
   }
-  updateFilterUI(linhas.length, todas.length);
-  const pos = new Map(todas.map((l, i) => [l.numero, i + 1]));  // nº de ordem do processo na aba (não muda ao filtrar)
+  updateFilterUI(linhas.length, todas.filter(l => !l.oculto).length);
+  const pos = new Map(todas.filter(l => !l.oculto).map((l, i) => [l.numero, i + 1]));  // nº de ordem do processo na aba (não muda ao filtrar)
   const cols = a.colunas.filter(c => c.key !== 'numero');
   table.innerHTML = gridHead(['__first', ...cols.map(c => c.key)], [{text: 'Processo'}, ...cols.map(c => ({text: c.titulo, title: c.titulo}))]) + `<tbody>${linhas.map(l => {
     const [cls, txt] = ESTADO[l.estado], ed = editable(l), waiting = ['extraindo', 'aguardando'].includes(l.estado);
@@ -184,14 +198,14 @@ function renderGrid() {
     const cut = l.medidas?.contexto?.cortado ? `<span class="tag warn" title="A IA viu ${l.medidas.contexto.paginas_enviadas} de ${l.medidas.contexto.paginas_total} páginas (limite de contexto)">cortado</span>` : '';
     const warn = l.citacoes_invalidas.length ? `<span class="tag err" title="Citações que não existem no PDF: ${esc(l.citacoes_invalidas.join('; '))}">⚠ citação</span>` : '';
     const h = tam.alt[l.numero];
-    return `<tr data-n="${esc(l.numero)}" class="${rc}"${h ? ` style="--rh:${h}px"` : ''}><td class="first"><div class="cc"><div class="numrow"><span class="idx" title="Nº de ordem nesta aba">${pos.get(l.numero)}</span><span class="num">${esc(l.numero)}</span><button type="button" class="copy" data-copy="${esc(l.numero)}" title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button></div>
-      <div class="sub"><span class="tag ${cls}">${txt}</span>${cut}${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> <span>revisado</span></label>` : ''}</div></div>
+    return `<tr data-n="${esc(l.numero)}" class="${rc}"${h ? ` style="--rh:${h}px"` : ''}><td class="first"><div class="cc"><div class="numrow"><span class="idx" title="Nº de ordem nesta aba">${pos.get(l.numero) ?? '–'}</span><span class="num">${esc(l.numero)}</span><button type="button" class="copy" data-copy="${esc(l.numero)}" title="Copiar o número do processo" aria-label="Copiar o número do processo">⧉</button></div>
+      <div class="sub"><span class="tag ${cls}">${txt}</span>${l.oculto ? '<span class="tag">oculto</span>' : ''}${l.sugestoes ? `<span class="tag blue" title="A IA sugeriu ${l.sugestoes} item(ns) para as abas Outros Bens / Fraudes: aguardam a sua autorização">💡 ${l.sugestoes}</span>` : ''}${cut}${warn}${ed ? `<label class="rev" title="Marcar como revisado"><input type="checkbox" data-rev ${l.reviewed ? 'checked' : ''}> <span>revisado</span></label>` : ''}</div></div>
       <span class="rzr" title="Arraste para ajustar a altura da linha · duplo clique restaura"></span></td>
       ${cols.map(c => cell(l, c, ed, waiting)).join('')}</tr>`;
   }).join('')}</tbody>`;
   if (!linhas.length) emptyGrid(todas.length ? 'Nenhum processo corresponde ao filtro' : 'Nenhum processo nesta aba', todas.length ? 'Ajuste ou limpe o filtro acima.' : 'Importe a planilha-modelo e envie PDFs (botão "Upload de Processo" no topo, ou arraste os arquivos para cá).');
 }
-function emptyGrid(t, p) { const g = $('grid-empty'); g.hidden = false; g.innerHTML = `<b>${esc(t)}</b>${esc(p)}`; }
+function emptyGrid(t, p) { const g = $('grid-empty'); g.className = 'grid-empty'; g.hidden = false; g.innerHTML = `<b>${esc(t)}</b>${esc(p)}`; }
 function ato(linha) {  // '<origem> - dd/mm/aaaa - descrição' -> data em negrito, origem discreta
   const m = String(linha).match(/^(.+?)\s+-\s+(\d{2}\/\d{2}\/\d{4}|data não informada)\s+-\s+(.+)$/);
   return m ? `<div class="li"><b>${esc(m[2])}</b> ${esc(m[3])} <span class="ori">${esc(m[1])}</span></div>` : `<div class="li">${esc(linha)}</div>`;
@@ -260,6 +274,7 @@ async function save(numero, key, value, td) {
 }
 $('grid').addEventListener('change', e => {
   const tr = e.target.closest('tr'); if (!tr) return;
+  if (e.target.matches('[data-item-k]')) { const [lista, numero, i] = tr.dataset.item.split('|'); return itemAcao(lista, numero, [+i], 'editar', {[e.target.dataset.itemK]: e.target.value || null}); }
   if (e.target.matches('[data-rev]')) return setReviewed(tr.dataset.n, e.target.checked);
   if (e.target.matches('[data-k]')) save(tr.dataset.n, e.target.dataset.k, e.target.value, e.target.closest('td'));
 });
@@ -271,13 +286,14 @@ $('grid').addEventListener('keydown', e => {
 $('grid').addEventListener('click', e => {
   if (e.target.closest('.rz,.rzr')) return;
   const cp = e.target.closest('[data-copy]'); if (cp) { e.stopPropagation(); return copiar(cp.dataset.copy, 'Número copiado'); }
+  const ia = e.target.closest('[data-item-act]'); if (ia) { const [lista, numero, i] = ia.closest('tr').dataset.item.split('|'); return itemAcao(lista, numero, [+i], ia.dataset.itemAct); }
   const tr = e.target.closest('tbody tr'); if (!tr || !tr.dataset.n) return;
   const lg = e.target.closest('[data-long]'); if (lg) openLong(tr.dataset.n, lg.dataset.long);
   if (e.target.closest('input[type=checkbox],label')) return;
   select(tr.dataset.n);
 });
 async function setReviewed(numero, v) {
-  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/review`, json('PUT', {reviewed: v})); row(numero).reviewed = v; dataKey = JSON.stringify(data); toast(v ? 'Marcado como revisado' : 'Marcado como a revisar', 'ok'); renderGrid(); renderAssistInfo(); }
+  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/review`, json('PUT', {reviewed: v})); row(numero).reviewed = v; dataKey = JSON.stringify(data); toast(v ? 'Marcado como revisado' : 'Marcado como a revisar', 'ok'); renderGrid(); renderAssistInfo(); if (v) await perguntarSugestoes(numero); }
   catch (e) { toast(e.message, 'err'); renderGrid(); }
 }
 /* texto longo (observações, corresponsáveis): janela para ler e editar tudo */
@@ -309,6 +325,16 @@ function select(numero) {
   renderAssistInfo(); renderChat();
   if (innerWidth > 900) $('q').focus({preventScroll: true});
 }
+function sugCard(l) {  // sugestões da IA para as abas Outros Bens / Alegações de Fraude, à espera da autorização do analista
+  if (!l.sugestoes || !data) return '';
+  const sg = sugestoesDe(l.numero);
+  const bot = (lista, i) => `<span class="sug-b"><button type="button" class="btn sm primary" data-sug="${lista}|${i}|autorizar">✓ Autorizar</button><button type="button" class="btn sm" data-sug="${lista}|${i}|descartar">✕</button></span>`;
+  const fr = sg.fraudes.map(f => `<li><div><b>${esc(f.tipo || 'Fraude (tipo a definir)')}</b> · ${esc(f.analise || 'análise a definir')}${f.resumo ? `<div class="muted">${esc(f.resumo)}</div>` : ''}${f.citacao ? `<div class="muted">Origem: ${esc(f.citacao)}</div>` : ''}</div>${bot('fraudes', f._i)}</li>`).join('');
+  const bn = sg.bens.map(b => `<li><div><b>${esc(b.ato || 'Ato')}</b> · ${esc(b.gravames || '')} <span class="muted">Matrícula ${esc(b.matricula || '—')}</span>${b.resumo ? `<div class="muted">${esc(b.resumo)}</div>` : ''}${b.citacao ? `<div class="muted">Origem: ${esc(b.citacao)}</div>` : ''}</div>${bot('bens', b._i)}</li>`).join('');
+  return `<div class="sugcard"><b>💡 Sugestões da IA para as abas</b><div class="muted">Só entram na planilha depois da sua autorização.</div>
+    ${fr ? `<div class="sug-t">Alegações de Fraude (${sg.fraudes.length}) <button type="button" class="btn sm" data-sug="fraudes|*|autorizar">Autorizar todas</button></div><ul>${fr}</ul>` : ''}
+    ${bn ? `<div class="sug-t">Outros Bens (${sg.bens.length}) <button type="button" class="btn sm" data-sug="bens|*|autorizar">Autorizar todos</button></div><ul>${bn}</ul>` : ''}</div>`;
+}
 function renderAssistInfo() {
   const l = sel && row(sel); if (!l) { $('assist-empty').hidden = false; $('assist-body').hidden = true; $('assist-sub').textContent = 'Selecione uma linha'; return; }
   const [cls, txt] = ESTADO[l.estado], ed = editable(l);
@@ -320,6 +346,7 @@ function renderAssistInfo() {
       ${ed ? `<span class="tag ${l.reviewed ? 'ok' : 'blue'}">${l.reviewed ? 'revisado' : 'a revisar'}</span>` : ''}
       ${l.modelo ? `<span class="chip">${esc(MODELO[l.modelo] || l.modelo)}</span>` : ''}${l.sistema ? `<span class="chip">${esc(l.sistema)}</span>` : ''}${l.paginas ? `<span class="chip">${l.paginas} págs.</span>` : ''}${l.medidas ? `<span class="chip" title="Páginas enviadas à IA e tokens da extração">IA viu ${l.medidas.contexto.paginas_enviadas}/${l.medidas.contexto.paginas_total} págs. · ${fmtN(l.medidas.tokens?.entrada)} tokens</span>` : ''}</div>
     ${manualCard}
+    ${sugCard(l)}
     ${l.error && !['extraindo', 'aguardando'].includes(l.estado) && !l.manual?.ativo ? cardErro(l) : ''}
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
@@ -327,10 +354,17 @@ function renderAssistInfo() {
       ${l.n_eventos ? `<button class="btn sm" data-eventos title="Todos os eventos lidos do PDF, sem IA">📅 Eventos (${l.n_eventos})</button>` : ''}
       ${!l.manual?.ativo ? '<button class="btn sm" data-manual-on title="Registra que este processo foi feito à mão: a IA não o extrai e a planilha mostra isso nas observações">✍ Feito manualmente</button>' : ''}
       ${l.docs.length && !l.manual?.ativo ? `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>` : ''}</div>
+    <div class="acts sec">${l.estado !== 'sem_pdf' || l.manual?.ativo ? '<button class="btn sm" data-hist title="Versões anteriores deste processo, com a opção de voltar">🕘 Histórico</button>' : ''}
+      <button class="btn sm" data-ocultar title="${l.oculto ? 'Volta a aparecer na tabela e na planilha' : 'Tira da tabela e da planilha exportada, sem apagar nada'}">${l.oculto ? '👁 Reexibir' : '🙈 Ocultar'}</button>
+      <button class="btn sm danger-btn" data-excluir title="Apaga o processo, os PDFs e o histórico dele">🗑 Excluir processo</button></div>
     <details class="pdfs" ${l.docs.some(d => d.status === 'error') ? 'open' : ''}><summary>PDFs deste processo (${l.docs.length})</summary>${pdfs || '<p class="muted">Nenhum PDF enviado para este processo.</p>'}</details>`;
   const q = (s) => $('assist-info').querySelector(s);
   q('[data-again]') && (q('[data-again]').onclick = () => reextract(l.numero, false));
   q('[data-copy-err]') && (q('[data-copy-err]').onclick = async () => { try { await navigator.clipboard.writeText(`${l.numero}\n${l.error}`); toast('Copiado', 'ok'); } catch (_) { toast('Não foi possível copiar', 'err'); } });
+  q('[data-hist]') && (q('[data-hist]').onclick = () => openHist(l.numero));
+  q('[data-ocultar]') && (q('[data-ocultar]').onclick = () => setOculto(l.numero, !l.oculto));
+  q('[data-excluir]') && (q('[data-excluir]').onclick = () => excluirProcesso(l.numero));
+  $('assist-info').querySelectorAll('[data-sug]').forEach(b => b.onclick = () => { const [lista, i, acao] = b.dataset.sug.split('|'); itemAcao(lista, l.numero, i === '*' ? null : [+i], acao); });
   q('[data-copy-num]') && (q('[data-copy-num]').onclick = () => copiar(l.numero, 'Número copiado'));
   q('[data-manual-on]') && (q('[data-manual-on]').onclick = () => setManual(l.numero, true));
   q('[data-manual-off]') && (q('[data-manual-off]').onclick = () => setManual(l.numero, false));
@@ -340,6 +374,52 @@ function renderAssistInfo() {
   $('assist-info').querySelectorAll('[data-del]').forEach(b => b.onclick = () => delDoc(b.dataset.del));
   $('assist-info').querySelectorAll('[data-retry]').forEach(b => b.onclick = () => retryDoc(b.dataset.retry));
   $('q').disabled = !l.docs.some(d => d.status === 'done'); $('q').placeholder = $('q').disabled ? 'Envie e aguarde a leitura do PDF para perguntar' : 'Pergunte sobre este processo…';
+}
+async function itemAcao(lista, numero, indices, acao, valores) {
+  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/itens`, json('PUT', {lista, acao, indices, valores})); if (acao !== 'editar') toast({autorizar: 'Autorizado: vai para a planilha', descartar: 'Descartado', sugerir: 'Voltou a ser sugestão'}[acao], 'ok'); await refresh(true); return true; }
+  catch (e) { toast(e.message, 'err'); refresh(true); return false; }
+}
+async function autorizarTodos(lista, itens) {
+  if (!confirm(`Autorizar ${itens.length} item(ns)? Eles passam a constar da planilha exportada.`)) return;
+  const porProc = {}; itens.forEach(i => (porProc[i.numero] ||= []).push(i._i));
+  for (const [n, idx] of Object.entries(porProc)) await itemAcao(lista, n, idx, 'autorizar');
+}
+const sugestoesDe = numero => ({bens: data.bens.filter(i => i.numero === numero && i._st === 'sugerido'), fraudes: data.fraudes.filter(i => i.numero === numero && i._st === 'sugerido')});
+async function perguntarSugestoes(numero) {  // ao marcar como revisado: pede a autorização para preencher as abas
+  const sg = sugestoesDe(numero), nf = sg.fraudes.length, nb = sg.bens.length; if (!nf && !nb) return;
+  const partes = [nf ? `${nf} alegação(ões) de fraude` : '', nb ? `${nb} ato(s) de matrícula com penhora/registro` : ''].filter(Boolean).join(' e ');
+  if (!confirm(`A IA encontrou ${partes} neste processo.\n\nAutorizar o preenchimento das abas ${[nf ? '“Alegações de Fraude”' : '', nb ? '“Outros Bens”' : ''].filter(Boolean).join(' e ')}?\n\nOK = autorizar tudo · Cancelar = decidir depois (ficam como sugestão no painel e nas abas)`)) return;
+  if (nf) await itemAcao('fraudes', numero, sg.fraudes.map(i => i._i), 'autorizar');
+  if (nb) await itemAcao('bens', numero, sg.bens.map(i => i._i), 'autorizar');
+}
+async function setOculto(numero, oculto) {
+  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/hidden`, json('PUT', {oculto})); toast(oculto ? 'Processo oculto (veja em “Ocultos” no filtro de situação)' : 'Processo reexibido', 'ok'); if (oculto) { sel = null; renderAssistInfo(); } refresh(true); }
+  catch (e) { toast(e.message, 'err'); }
+}
+async function excluirProcesso(numero) {
+  const l = row(numero); if (!l) return;
+  if (!confirm(`Excluir o processo ${numero}?\n\nIsso apaga ${l.docs.length} PDF(s), a extração e o histórico dele. Não tem volta.\n${tplState.ativo ? 'Se ele constar da planilha-modelo, volta (vazio) quando o modelo for enviado de novo; para tirá-lo só da tela e da exportação, use “Ocultar”.' : ''}`)) return;
+  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}`, {method: 'DELETE'}); toast('Processo excluído', 'ok'); sel = null; renderAssistInfo(); refresh(true); }
+  catch (e) { toast(e.message, 'err'); }
+}
+/* histórico de versões */
+let histFor = null;
+async function openHist(numero) {
+  histFor = numero; $('hist-sub').textContent = numero; $('hist-list').innerHTML = '<p class="muted">Carregando…</p>'; $('dlg-hist').showModal();
+  try {
+    const r = await api(`/api/cases/${caseId}/processes/${enc(numero)}/history`);
+    $('hist-list').innerHTML = r.versoes.map((v, i) => `<details class="hist" data-h="${v.id}"><summary><span class="tag ${i === 0 ? 'ok' : ''}">${i === 0 ? 'versão atual' : `versão ${r.versoes.length - i}`}</span> <b>${esc(v.origem)}</b> <span class="muted">${dh(v.at)}</span><div class="muted">${esc(v.resumo || '')}</div></summary><div class="hist-body muted">Abrindo…</div></details>`).join('')
+      || '<p class="muted">Ainda não há versões guardadas. O histórico começa na próxima extração ou edição deste processo.</p>';
+    $('hist-list').querySelectorAll('details').forEach((d, i) => d.addEventListener('toggle', async () => {
+      if (!d.open || d.dataset.ok) return; d.dataset.ok = '1';
+      try { const v = await api(`/api/cases/${caseId}/processes/${enc(numero)}/history/${d.dataset.h}`);
+        d.querySelector('.hist-body').innerHTML = `<dl>${v.campos.map(c => `<dt>${esc(c.titulo)}</dt><dd>${esc(c.valor)}</dd>`).join('') || '<dd>Sem campos preenchidos.</dd>'}</dl><p>${v.reviewed ? 'Estava marcado como revisado.' : 'Estava como “a revisar”.'} ${v.bens} item(ns) em Outros Bens · ${v.fraudes} em Fraudes.</p>${i === 0 ? '' : '<button type="button" class="btn sm primary" data-restore>↩ Voltar a esta versão</button>'}`;
+        const b = d.querySelector('[data-restore]'); if (b) b.onclick = async () => {
+          if (!confirm('Voltar o processo a esta versão? A versão atual continua guardada no histórico.')) return;
+          try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/history/${d.dataset.h}/restore`, {method: 'POST'}); toast('Versão restaurada', 'ok'); $('dlg-hist').close(); refresh(true); } catch (e) { toast(e.message, 'err'); } };
+      } catch (e) { d.querySelector('.hist-body').textContent = e.message; }
+    }));
+  } catch (e) { $('hist-list').innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
 }
 async function setManual(numero, ativo) {
   let nota = null;
@@ -412,7 +492,7 @@ $('ev-use').onclick = async () => {
   const L = evFiltrados(); if (!L.length) return; const l = row(evCache.numero);
   if (!l || !editable(l)) return toast('Este processo ainda não tem extração para receber observações. Use "Copiar lista".', 'err');
   if ((l.valores.observacoes || '').trim() && !confirm('Substituir as observações atuais por esta lista de eventos?')) return;
-  await save(evCache.numero, 'observacoes', L.map(e => e.linha).join('\n'), null); $('dlg-ev').close();
+  await save(evCache.numero, 'observacoes', L.map(e => e.linha).join('\n\n'), null); $('dlg-ev').close();
 };
 
 /* ---------- medições: tokens, corte do contexto, tempos ---------- */
@@ -465,34 +545,62 @@ function renderMed() {
 $('btn-med').onclick = () => { renderMed(); $('med-pdf').href = `/api/cases/${caseId}/medicoes.pdf?tz=${new Date().getTimezoneOffset()}`; $('dlg-med').showModal(); };
 
 /* ---------- janelas: upload, modelo, PDFs ---------- */
-function renderPicked() {
-  $('picked').innerHTML = picked.map((f, i) => `<li><span>📄 ${esc(f.name)} <span class="muted">(${(f.size / 1048576).toFixed(1)} MB)</span></span><button type="button" class="x" data-x="${i}" aria-label="Remover">✕</button></li>`).join('');
+const CNJ = /\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}/;
+let ignorados = 0;
+function renderPicked() {  // agrupa por nº do processo lido do nome do arquivo
+  const grupos = new Map(); picked.forEach((f, i) => { const n = (f.name.match(CNJ) || [])[0] || ''; (grupos.get(n) || grupos.set(n, []).get(n)).push([f, i]); });
+  const ordem = [...grupos.keys()].sort((a, b) => !a - !b || a.localeCompare(b));
+  const mb = picked.reduce((t, f) => t + f.size, 0) / 1048576;
+  $('picked-sum').innerHTML = picked.length ? `<b>${picked.length}</b> PDF(s) · <b>${ordem.filter(Boolean).length}</b> processo(s) identificado(s) pelo nome · ${mb.toFixed(1)} MB${grupos.has('') ? ` · <span class="tag warn">${grupos.get('').length} sem nº no nome</span>` : ''}${ignorados ? ` · ${ignorados} arquivo(s) que não são PDF foram ignorados` : ''} <button type="button" class="btn sm" id="picked-clear">Limpar</button>` : '';
+  const pc = $('picked-clear'); if (pc) pc.onclick = () => { picked = []; ignorados = 0; renderPicked(); };
+  $('picked').innerHTML = ordem.map(n => `<li class="grp"><div class="grp-h">${n ? `<span class="num">${esc(n)}</span>` : '<span class="tag warn">Sem nº no nome</span> <span class="muted">o sistema tenta achar o nº no texto do PDF</span>'} <span class="muted">${grupos.get(n).length} arquivo(s)</span></div>
+    ${grupos.get(n).sort((a, b) => a[0].name.localeCompare(b[0].name, 'pt', {numeric: true})).map(([f, i]) => `<div class="arq"><span>📄 ${esc(f.name)} <span class="muted">(${(f.size / 1048576).toFixed(1)} MB)</span></span><button type="button" class="x" data-x="${i}" aria-label="Remover">✕</button></div>`).join('')}</li>`).join('');
   document.querySelectorAll('#picked [data-x]').forEach(b => b.onclick = () => { picked.splice(+b.dataset.x, 1); renderPicked(); });
-  $('pdfs-btn').disabled = !picked.length;
+  $('pdfs-btn').disabled = !picked.length; $('pdfs-btn').textContent = picked.length ? `Enviar ${picked.length} PDF(s)` : 'Enviar PDFs';
 }
-const addFiles = fl => { picked = [...picked, ...[...fl].filter(f => f.name.toLowerCase().endsWith('.pdf'))]; renderPicked(); };
+const addFiles = fl => {
+  const todos = [...fl], pdfs = todos.filter(f => f.name.toLowerCase().endsWith('.pdf')); ignorados += todos.length - pdfs.length;
+  const tem = new Set(picked.map(f => `${f.name}|${f.size}`));  // não repete o mesmo arquivo
+  picked = [...picked, ...pdfs.filter(f => !tem.has(`${f.name}|${f.size}`) && tem.add(`${f.name}|${f.size}`))]; renderPicked();
+};
+async function arquivosDoDrop(dt) {  // aceita arquivos soltos e PASTAS inteiras (com subpastas)
+  const entradas = [...(dt.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!entradas.some(e => e.isDirectory)) return [...dt.files];
+  const out = [];
+  const ler = async e => {
+    if (e.isFile) return out.push(await new Promise((ok, no) => e.file(ok, no)));
+    const r = e.createReader(); let lote;
+    do { lote = await new Promise((ok, no) => r.readEntries(ok, no)); for (const x of lote) await ler(x); } while (lote.length);
+  };
+  for (const e of entradas) { try { await ler(e); } catch (_) { /* pasta sem permissão: segue */ } }
+  return out;
+}
 function openUpload(files) { if (files) addFiles(files); $('msg').textContent = ''; $('msg').className = 'msg'; if (!$('dlg-upload').open) $('dlg-upload').showModal(); }
 $('btn-upload').onclick = () => openUpload();
 $('drop').onclick = () => $('pdfs').click();
 $('drop').onkeydown = e => (e.key === 'Enter' || e.key === ' ') && (e.preventDefault(), $('pdfs').click());
 $('pdfs').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+$('pasta-btn').onclick = e => { e.stopPropagation(); $('pasta').click(); };
+$('pasta').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
 ['dragenter', 'dragover'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => $('drop').addEventListener(ev, e => { e.preventDefault(); $('drop').classList.remove('over'); }));
-$('drop').addEventListener('drop', e => addFiles(e.dataTransfer.files));
+$('drop').addEventListener('drop', async e => addFiles(await arquivosDoDrop(e.dataTransfer)));
 // arrastar PDFs direto para a planilha abre o envio
 const gw = $('grid-wrap');
 ['dragenter', 'dragover'].forEach(ev => gw.addEventListener(ev, e => { if (!caseId) return; e.preventDefault(); dragging = true; gw.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => gw.addEventListener(ev, e => { e.preventDefault(); dragging = false; gw.classList.remove('over'); }));
-gw.addEventListener('drop', e => { if (caseId && e.dataTransfer.files.length) openUpload(e.dataTransfer.files); });
+gw.addEventListener('drop', async e => { if (!caseId) return; const fs = await arquivosDoDrop(e.dataTransfer); if (fs.length) openUpload(fs); });
 $('pdfs-btn').onclick = async () => {
-  if (!picked.length) return; $('pdfs-btn').disabled = true; $('msg').className = 'msg'; let n = 0;
-  for (const f of picked) {
-    $('msg').textContent = `Enviando ${++n}/${picked.length}: ${f.name}…`;
+  if (!picked.length) return; $('pdfs-btn').disabled = true; $('msg').className = 'msg'; let n = 0; const falhas = [], total = picked.length;
+  for (const f of [...picked]) {  // um por vez; uma falha não interrompe o lote
+    $('msg').textContent = `Enviando ${++n}/${total}: ${f.name}…`; $('up-bar').hidden = false; $('up-bar').firstElementChild.style.width = `${n / total * 100}%`;
     const fd = new FormData(); fd.append('file', f); fd.append('case_id', caseId); fd.append('tipo', $('tipo').value); fd.append('sistema', $('sistema').value);
-    try { await api('/api/documents', {method: 'POST', body: fd}); }
-    catch (e) { $('msg').className = 'msg err'; $('msg').textContent = `${f.name}: ${e.message}`; $('pdfs-btn').disabled = false; return; }
+    try { await api('/api/documents', {method: 'POST', body: fd}); picked = picked.filter(x => x !== f); }
+    catch (e) { falhas.push(`${f.name}: ${e.message}`); }
   }
-  toast(`${picked.length} PDF(s) enviado(s). A leitura segue em segundo plano.`, 'ok'); picked = []; renderPicked(); $('dlg-upload').close(); refresh(true);
+  $('up-bar').hidden = true; ignorados = 0; renderPicked(); refresh(true);
+  if (falhas.length) { $('msg').className = 'msg err'; $('msg').textContent = `${total - falhas.length} enviado(s), ${falhas.length} com falha (continuam na lista para tentar de novo): ${falhas.slice(0, 3).join(' | ')}${falhas.length > 3 ? ' …' : ''}`; return; }
+  toast(`${total} PDF(s) enviado(s). A leitura segue em segundo plano.`, 'ok'); $('dlg-upload').close();
 };
 function showTemplate(t) {
   tplState = t; $('tpl-del').hidden = !t.ativo; $('tpl-dot').hidden = !t.ativo;
@@ -501,6 +609,7 @@ function showTemplate(t) {
     ? `<li>✔ <b>${esc(a.aba)}</b>: ${a.reconhecidas.length} coluna(s) reconhecida(s)${a.nao_reconhecidas.length ? `<br><span class="tag warn">Ficam em branco</span> ${esc(a.nao_reconhecidas.join(' · '))}` : ''}</li>`
     : `<li><span class="tag warn">Atenção</span> <b>${esc(a.aba)}</b>: ${esc(a.motivo)}</li>`).join('');
   $('tpl-report').innerHTML = `<ul>${abas}</ul>` + ((t.ausentes || []).length ? `<div class="alert warn">O modelo não tem a(s) aba(s): ${esc(t.ausentes.join(', '))}. Processos desse tipo aparecem só em Relatório.</div>` : '')
+    + (t.dicas || []).map(d => `<p class="muted">💡 ${esc(d)}</p>`).join('')
     + ((t.ignoradas || []).length ? `<p class="muted">Voltam intactas: ${esc(t.ignoradas.join(', '))}.</p>` : '');
 }
 $('btn-tpl').onclick = () => $('dlg-tpl').showModal();

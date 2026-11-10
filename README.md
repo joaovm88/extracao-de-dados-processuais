@@ -118,3 +118,12 @@ Limites: um worker só; o índice de busca em memória se perde ao reiniciar (o 
 - **Feito manualmente:** no painel do processo, *✍ Feito manualmente* (com observação opcional). A IA deixa de extrair o processo, a linha ganha a etiqueta e a planilha exportada registra "Processo analisado manualmente" nas observações (nenhum valor da IA é escrito). *Desfazer marcação* devolve o processo ao fluxo normal. Filtro: *Feitos manualmente*.
 - **Cronologia como lista:** o campo de observações mostra um ato por linha (data em destaque e origem discreta). *Padronizar lista* (na janela do campo) separa atos colados na mesma linha. Os três prompts (execução fiscal, outras ações e recursos) pedem só a cronologia `[ORIGEM] - [dd/mm/aaaa] - [ato]`.
 - **Medições:** *Baixar relatório (PDF)* gera um PDF com os indicadores, as barras, a tabela por processo e o registro de execução.
+
+## Sugestões da IA para "Alegações de Fraude" e "Outros Bens", histórico, ocultar/excluir e envio em lote
+
+- **Fraudes e bens com autorização:** quando a IA reconhece uma alegação de fraude (tipo e análise em lista fechada: `FRAUDE_TIPOS` e `FRAUDE_ANALISES` em `app/schemas.py`) ou um imóvel com auto de penhora/registro, o item vira uma **sugestão**. Ele aparece no painel do processo e nas abas, com *Autorizar* / *Descartar*; ao marcar o processo como revisado o sistema pergunta se pode preencher as abas. **Só o que foi autorizado vai para a planilha.** Em Outros Bens, matrícula, características e proprietário saem só na primeira linha de cada matrícula.
+- **Histórico:** cada extração, edição, autorização ou restauração guarda uma versão (40 por processo). *🕘 Histórico* no painel mostra as versões e permite voltar a uma delas.
+- **Ocultar / excluir processo:** *Ocultar* tira o processo da tabela e da planilha exportada sem apagar nada (filtro *Ocultos* para reexibir). *Excluir processo* apaga o processo, os PDFs e o histórico dele.
+- **Envio em lote:** arraste uma pasta inteira (com subpastas) ou use *📁 Escolher pasta*. Os PDFs são agrupados pelo nº CNJ lido do nome do arquivo; os sem número são sinalizados e o sistema tenta achar o nº no texto. Uma falha não interrompe o lote.
+- **Colunas opcionais do modelo:** se uma aba de processos tiver a coluna `Nº` (ou `Ordem`/`Item`) e/ou `Situação da análise`, a exportação preenche o nº de ordem e "Feito manualmente / Revisado / A revisar". Sem modelo, as duas colunas vão ao final das abas.
+- **Cronologia:** um ato por linha, com uma linha em branco entre os atos.

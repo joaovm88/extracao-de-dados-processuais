@@ -120,7 +120,8 @@ def test_eproc_pdf_end_to_end_events_index_chronology_check_and_endpoint(env):
     assert "Auto de penhora do imóvel" in chamada["user"]
     res = d["result"]
     assert res["medidas"]["contexto"]["modo"] == "eventos" and res["medidas"]["contexto"]["eventos_total"] == 4
-    linhas = res["fields"]["observacoes"].splitlines()
+    assert "\n\n" in res["fields"]["observacoes"]  # uma linha em branco entre os atos
+    linhas = [x for x in res["fields"]["observacoes"].splitlines() if x]
     assert linhas[0].startswith("Evento 2, pg. 1 - 02/04/2024") and linhas[1].startswith("Evento 4, pg. 1 - 10/06/2024")  # datas do eproc, em ordem
     assert res["cronologia"] == {"linhas": 2, "datas_corrigidas": 2, "inexistentes": [], "ordenada": True, "eventos_base": 4}
     lista = c.get(f"/api/cases/{case['id']}/processes/{d['numero_processo']}/eventos").json()

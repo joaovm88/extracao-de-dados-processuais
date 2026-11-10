@@ -15,7 +15,8 @@ _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEG
               # registro da última extração por IA: início/fim (epoch) e resultado ('rodando' | 'ok' | 'erro')
               "ext_started_at": "REAL", "ext_finished_at": "REAL", "ext_status": "TEXT",
               # processo feito à mão pelo analista: a IA não mexe nele e a planilha registra isso
-              "manual": "INTEGER DEFAULT 0", "manual_note": "TEXT", "manual_at": "REAL"}
+              "manual": "INTEGER DEFAULT 0", "manual_note": "TEXT", "manual_at": "REAL",
+              "hidden": "INTEGER DEFAULT 0"}  # oculto: sai da tabela e da planilha exportada, sem apagar nada
 
 
 # Colunas de documents adicionadas ao longo das versões: bancos antigos (volume do Docker) são migrados na abertura.
@@ -45,6 +46,10 @@ class MetadataDB:
                     parte INTEGER, page_start INTEGER DEFAULT 1, classe TEXT, pages_total INTEGER DEFAULT 0,
                     pages_done INTEGER DEFAULT 0, pages_ocr INTEGER DEFAULT 0, error TEXT, metadata TEXT,
                     created_at REAL, updated_at REAL, sha256 TEXT);
+                CREATE TABLE IF NOT EXISTS history (
+                    id TEXT PRIMARY KEY, case_id TEXT NOT NULL, numero TEXT NOT NULL, at REAL, origem TEXT, resumo TEXT,
+                    snapshot TEXT);
+                CREATE INDEX IF NOT EXISTS history_proc ON history (case_id, numero, at);
                 """
             )
             have = {r["name"] for r in self._conn.execute("PRAGMA table_info(processes)")}
@@ -98,10 +103,47 @@ class MetadataDB:
     def delete_case(self, cid: str) -> None:
         """Remove o caso com seus processos e registros de PDFs (os arquivos são apagados por quem chama)."""
         with self._lock:
-            for t in ("documents", "processes"):
+            for t in ("documents", "processes", "history"):
                 self._conn.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
             self._conn.execute("DELETE FROM cases WHERE id=?", (cid,))
             self._conn.commit()
+
+    def delete_process(self, case_id: str, numero: str) -> None:
+        """Remove o processo e o seu histórico (os PDFs são apagados por quem chama)."""
+        with self._lock:
+            self._conn.execute("DELETE FROM history WHERE case_id=? AND numero=?", (case_id, numero))
+            self._conn.execute("DELETE FROM processes WHERE case_id=? AND numero=?", (case_id, numero))
+            self._conn.commit()
+
+    # ---- histórico de versões do resultado de cada processo
+    HISTORY_MAX = 40
+
+    def add_history(self, case_id: str, numero: str, origem: str, resumo: str, snapshot: dict) -> str:
+        hid = uuid.uuid4().hex
+        with self._lock:
+            self._conn.execute("INSERT INTO history VALUES (?,?,?,?,?,?,?)",
+                               (hid, case_id, numero, time.time(), origem, resumo, json.dumps(snapshot, ensure_ascii=False)))
+            self._conn.execute(
+                "DELETE FROM history WHERE case_id=? AND numero=? AND id NOT IN "
+                "(SELECT id FROM history WHERE case_id=? AND numero=? ORDER BY at DESC, rowid DESC LIMIT ?)",
+                (case_id, numero, case_id, numero, self.HISTORY_MAX))
+            self._conn.commit()
+        return hid
+
+    def list_history(self, case_id: str, numero: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT id, at, origem, resumo FROM history WHERE case_id=? AND numero=? "
+                                      "ORDER BY at DESC, rowid DESC", (case_id, numero)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_history(self, case_id: str, numero: str, hid: str) -> Optional[dict]:
+        with self._lock:
+            r = self._conn.execute("SELECT * FROM history WHERE case_id=? AND numero=? AND id=?", (case_id, numero, hid)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["snapshot"] = json.loads(d["snapshot"]) if d["snapshot"] else {}
+        return d
 
     def list_cases(self) -> list[dict]:
         with self._lock:
