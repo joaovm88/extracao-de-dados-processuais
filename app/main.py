@@ -40,6 +40,8 @@ class ChatIn(BaseModel):
 
 class TextIn(BaseModel):
     texto: str
+    case_id: Optional[str] = None  # com o processo informado, as datas vêm do índice de eventos e a lista sai em ordem
+    numero: Optional[str] = None
 
 
 class HiddenIn(BaseModel):
@@ -118,6 +120,15 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         else:
             recover_stuck_docs()
         threading.Thread(target=watchdog, daemon=True).start()
+        if s.search_backend == "memory":  # índice em memória começa vazio a cada partida: refaz das páginas já lidas (chat e processos grandes)
+            def _reindexar():
+                try:
+                    n = rag.reindex([d for d in db.list() if d["status"] == "done"], s, store)
+                    if n:
+                        logging.getLogger("api").info("Índice de busca refeito para %s PDF(s) já lidos", n)
+                except Exception:  # noqa: BLE001
+                    logging.getLogger("api").exception("Falha ao refazer o índice de busca")
+            threading.Thread(target=_reindexar, daemon=True).start()
         # Fila em memória: worker na mesma aplicação. Com Redis, rode `python -m app.run_worker`.
         if s.queue_backend == "memory":
             threading.Thread(target=run_worker, args=(queue, s, db, store, stop, llm), daemon=True).start()
@@ -145,8 +156,16 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     def format_observacoes(body: TextIn):
         """Deixa a cronologia como lista (um ato por linha), sem gastar IA."""
         from .extract import format_cronologia
+        from .ingest import eventos as ev_mod, pje as pje_mod
 
-        return {"texto": format_cronologia(body.texto) or ""}
+        texto = format_cronologia(body.texto) or ""
+        p = db.get_process(body.case_id, body.numero) if body.case_id and body.numero else None
+        sistema = ((p or {}).get("result") or {}).get("sistema")
+        if texto and sistema in ("eproc", "pje"):
+            evs = load_eventos(s, db.docs_for_process(body.case_id, body.numero))
+            if evs:  # data registrada no sistema para cada evento/documento, em ordem cronológica
+                texto = format_cronologia((pje_mod if sistema == "pje" else ev_mod).validar_cronologia(texto, evs)[0]) or ""
+        return {"texto": texto}
 
     @app.post("/api/format/corresponsaveis")
     def format_corresponsaveis(body: TextIn):

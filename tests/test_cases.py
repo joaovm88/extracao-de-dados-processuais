@@ -1276,3 +1276,41 @@ def test_assistant_answer_goes_to_observations_in_chronology_format(env):
     assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "Há bloqueio?", "resposta": "Sim: **R$ 48.320,15** bloqueados (VOL 001, pg. 2)."}).json()["adicionadas"] == 0  # não duplica
     assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "x", "resposta": "Não encontrei."}).json()["adicionadas"] == 0
     assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Resposta do assistente"
+
+
+def test_standardize_list_converts_pasted_assistant_text_into_acts():
+    t = ("Evento 307, pg. 1 - 23/09/2026 - Juntada de auto.\n\n[Assistente · Existe valor bloqueado?]\nSim, existem valores bloqueados:\n\n"
+         "**R$ 1.125,61** em nome de Divino (Evento 68, pg. 3). **R$ 233.644,19** em ativo escriturado (Evento 68, pg. 4) e "
+         "**R$ 5,00** (cumprida parcialmente) (Evento 68, pgs. 1 a 5).\n\nNota do analista, sem citação.")
+    linhas = [x for x in ex.format_cronologia(t).split("\n") if x]
+    assert linhas == ["Evento 307, pg. 1 - 23/09/2026 - Juntada de auto.",
+                      "Evento 68, pg. 3 - data não informada - R$ 1.125,61 em nome de Divino.",
+                      "Evento 68, pg. 4 - data não informada - R$ 233.644,19 em ativo escriturado.",
+                      "Evento 68, pg. 1 - data não informada - R$ 5,00 (cumprida parcialmente).",
+                      "Nota do analista, sem citação."]
+    assert ex.format_cronologia("Evento 1 - 01/01/2020 - Sentença que\njulga procedente.") == "Evento 1 - 01/01/2020 - Sentença que julga procedente."
+
+
+def test_chat_rebuilds_lost_index_and_reads_the_cited_event_directly(env, monkeypatch):
+    from app import rag
+    c, llm, tmp = env
+    cid, d = _caso_com_pdf(c, tmp, "Chat")
+    st = c.app.state if hasattr(c.app, "state") else None
+    r1 = c.post("/api/chat", json={"question": "Existe valor bloqueado pelo SISBAJUD?", "case_id": cid, "numero": NUM}).json()
+    assert r1["sources"]
+    # simula a perda do índice (modo sem Docker reiniciado): a pergunta seguinte refaz o índice das páginas guardadas
+    from app.search.memory import MemoryStore
+    import gc
+    for o in gc.get_objects():
+        if isinstance(o, MemoryStore):
+            o._rows.clear()
+    r2 = c.post("/api/chat", json={"question": "Existe valor bloqueado pelo SISBAJUD?", "case_id": cid, "numero": NUM}).json()
+    assert r2["sources"] and r2["mode"] != "none"
+    # pergunta que cita um evento: as páginas dele vão direto para a IA
+    pages = [{"page": 1, "text": "capa do processo", "refs": {}}, {"page": 2, "text": "Detalhamento da ordem judicial de bloqueio de valores", "refs": {"evento": "68", "pg": "1"}}]
+    from app.config import Settings
+    s = Settings()
+    (s.data_dir / "pages").mkdir(parents=True, exist_ok=True)
+    (s.data_dir / "pages" / "docx.json").write_text(__import__("json").dumps(pages), encoding="utf-8")
+    hits = rag._citados("Pode avaliar o Evento 68?", [{"id": "docx"}], s)
+    assert [h.page for h in hits] == [2] and rag._citados("Qual o último andamento?", [{"id": "docx"}], s) == []

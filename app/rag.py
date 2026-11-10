@@ -1,4 +1,6 @@
 """Motor RAG: recupera trechos (híbrido) de todas as partes do processo e responde citando a origem."""
+import json
+import re
 from typing import Optional
 
 from .config import Settings
@@ -50,11 +52,68 @@ def _extractive_answer(question: str, hits: list[Hit], docs: dict) -> str:
     return "\n".join(parts)
 
 
+_PEDE = re.compile(r"\b(evento|id)\s*(?:n[ºo°.]*\s*)?(\d+)", re.IGNORECASE)
+
+
+def _paginas(settings: Settings, doc_id: str) -> list[dict]:
+    p = settings.data_dir / "pages" / f"{doc_id}.json"
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def reindex(docs: list[dict], settings: Settings, store: SearchStore) -> int:
+    """Refaz o índice de busca a partir das páginas já lidas e guardadas em disco (sem reler o PDF nem refazer OCR).
+    Necessário quando o índice se perdeu: modo sem Docker reiniciado, ou Elasticsearch recriado."""
+    from .ingest.chunker import chunk_page
+
+    n = 0
+    for d in docs:
+        pages = _paginas(settings, d["id"])
+        if not pages:
+            continue
+        store.delete(d["id"])
+        lote = []
+        for pg in pages:
+            lote.extend(chunk_page(pg["page"], pg["text"]))
+            if len(lote) >= 200:
+                store.index(d["id"], lote)
+                lote = []
+        if lote:
+            store.index(d["id"], lote)
+        n += 1
+    return n
+
+
+def _citados(question: str, docs: list[dict], settings: Settings, limite: int = 14000) -> list[Hit]:
+    """'Avalie o Evento 68' / 'o que diz o ID 123': as páginas desse evento/documento vão direto para a IA, sem depender da busca."""
+    pedidos = {(m.group(1).lower(), m.group(2)) for m in _PEDE.finditer(question)}
+    if not pedidos:
+        return []
+    out, usado = [], 0
+    for d in docs:
+        for pg in _paginas(settings, d["id"]):
+            refs = pg.get("refs") or {}
+            if any(str(refs.get("evento" if tipo == "evento" else "id") or "") == num for tipo, num in pedidos):
+                texto = " ".join(pg["text"].split())[:3500]
+                if not texto or usado + len(texto) > limite:
+                    continue
+                out.append(Hit(d["id"], pg["page"], texto, 1.0))
+                usado += len(texto)
+    return out
+
+
 def answer(question: str, docs: list[dict], settings: Settings, store: SearchStore,
            llm: Optional[LLMProvider] = None) -> dict:
     """docs: PDFs (partes) do processo consultado; vazio = busca em tudo."""
     dmap = {d["id"]: d for d in docs}
     hits = store.search(question, list(dmap) or None, 6)
+    if not hits and docs and reindex(docs, settings, store):  # o índice se perdeu: refaz das páginas guardadas e busca de novo
+        hits = store.search(question, list(dmap) or None, 6)
+    diretos = _citados(question, docs, settings)
+    vistos = {(h.doc_id, h.page) for h in diretos}
+    hits = diretos + [h for h in hits if (h.doc_id, h.page) not in vistos]
     sources = [{"doc_id": h.doc_id, "page": h.page, "rotulo": _lab(dmap, h.doc_id, h.page),
                 "snippet": " ".join(h.text.split())[:300]} for h in hits]
     if not hits:

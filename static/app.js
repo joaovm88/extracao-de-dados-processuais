@@ -308,7 +308,7 @@ function openLong(numero, key) {
   $('notes-cit').textContent = corte + conf + (l.citacoes[key] ? `Origem: ${l.citacoes[key]}` : ''); $('notes-fmt').hidden = !['corresponsaveis', 'observacoes'].includes(key); $('dlg-notes').showModal(); $('notes-text').focus();
 }
 $('notes-fmt').onclick = async () => {
-  try { const r = await api(`/api/format/${longFor.key}`, json('POST', {texto: $('notes-text').value})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }
+  try { const r = await api(`/api/format/${longFor.key}`, json('POST', {texto: $('notes-text').value, case_id: caseId, numero: longFor.numero})); $('notes-text').value = r.texto; toast('Lista padronizada (clique em Salvar para gravar)'); } catch (e) { toast(e.message, 'err'); }
 };
 $('notes-save').onclick = async () => { const f = longFor; await save(f.numero, f.key, $('notes-text').value, null); $('dlg-notes').close(); };
 

@@ -347,6 +347,25 @@ _ATO = re.compile(
     r"\s*[-–—]\s*(?:\d{2}/\d{2}/\d{4}|data não informada)\s*[-–—]\s*", re.IGNORECASE)
 
 
+_CIT_PAR = re.compile(
+    r"\(\s*((?:Evento\s+\d+|ID\s+\d{6,}|VOL\s+\d+)(?:\s*,\s*(?:VOL\s+\d+|p[áa]?gs?\.?\s*\d+(?:\s+(?:a|e)\s+\d+)*|ID\s+\d+))*)\s*\)", re.IGNORECASE)
+
+
+def _atos_de_paragrafo(par: str) -> list[str]:
+    """Parágrafo do assistente ('… R$ 95,30 em nome de Fulano (Evento 68, pg. 3). … (Evento 68, pg. 4).') -> uma linha de
+    cronologia por citação: '<origem> - data não informada - <trecho que a citação encerra>'."""
+    out, ini = [], 0
+    for m in _CIT_PAR.finditer(par):
+        trecho = re.sub(r"[*_`#]+", "", par[ini:m.start()])
+        trecho = re.sub(r"\s+", " ", trecho).strip(" ;,.:-–—")
+        trecho = re.sub(r"^(?:e|além de|bem como)\s+", "", trecho, flags=re.IGNORECASE).strip()
+        origem = re.sub(r"p[áa]?gs?\.?\s*(\d+)(?:\s+(?:a|e)\s+\d+)*", r"pg. \1", re.sub(r"\s+", " ", m.group(1)), flags=re.IGNORECASE)
+        if trecho:
+            out.append(f"{origem} - data não informada - {trecho[0].upper() + trecho[1:]}.")
+        ini = m.end()
+    return out
+
+
 def format_cronologia(value) -> Optional[str]:
     """Deixa a cronologia como lista: um ato por linha, '<origem> - dd/mm/aaaa - descrição'. Separa atos colados na mesma
     linha, tira marcadores/numeração e traços diferentes, e junta continuações de frase. Texto que não é lista (ex.: 'Não
@@ -354,18 +373,24 @@ def format_cronologia(value) -> Optional[str]:
     if value is None:
         return None
     texto = str(value).replace("\r", "")
-    if not _ATO.search(texto):
+    if not _ATO.search(texto) and not _CIT_PAR.search(texto):
         return texto.strip() or None
     atual: list[str] = []
-    for linha in texto.split("\n"):
-        linha = _BULLET_LISTA.sub("", linha).strip()
-        if not linha:
+    colada = False  # a linha vem logo abaixo da anterior (sem linha em branco entre elas)?
+    for bruta in texto.split("\n"):
+        linha = _BULLET_LISTA.sub("", bruta).strip()
+        if not linha or re.match(r"\[Assistente\b[^\]]*\]$", linha):  # em branco, ou cabeçalho do bloco antigo do chat
+            colada = False
             continue
+        era_colada, colada = colada, True
         marcas = [m.start() for m in _ATO.finditer(linha)]
+        if not marcas and _CIT_PAR.search(linha):  # texto do assistente com '(Evento 68, pg. 3)': um ato por citação
+            atual.extend(_atos_de_paragrafo(linha))
+            continue
         if not marcas:
-            if atual and not linha.startswith("["):  # continuação do ato anterior (frase quebrada em duas linhas)
+            if era_colada and atual and _ATO.match(atual[-1]) and not linha.startswith("[") and not linha.endswith(":"):  # frase quebrada em duas linhas
                 atual[-1] += " " + linha
-            else:
+            elif not linha.endswith(":") or not _CIT_PAR.search(texto):  # 'Sim, existem valores…:' (introdução do chat) não é ato
                 atual.append(linha)
             continue
         if marcas[0] > 0:  # texto antes do primeiro ato (ex.: um título)

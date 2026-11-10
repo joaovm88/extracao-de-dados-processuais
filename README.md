@@ -146,3 +146,9 @@ Botão **📥 Mcfly** na barra da planilha. Envie o .xlsx gerado no Mcfly (SAJ);
 ## Resposta do assistente nas observações
 
 *Adicionar às observações* converte a resposta do chat em linhas da cronologia (`Evento/ID, pg. - dd/mm/aaaa - ato`), uma por fato citado, e as encaixa na ordem das datas. No eproc e no PJe a data vem do índice do próprio processo. A IA redige as linhas (só são aceitas origens que constam da resposta); se ela estiver indisponível, vale uma conversão por regras. Resposta sem nenhuma citação pode ser adicionada como texto, mediante confirmação.
+
+## Chat: índice de busca e eventos citados
+
+- Se o índice de busca se perdeu (modo sem Docker reiniciado, Elasticsearch recriado), ele é refeito a partir das páginas já lidas e guardadas em disco: na partida (modo em memória) e, em qualquer modo, quando uma pergunta não acha nada. Não é preciso reenviar os PDFs.
+- Pergunta que cita um evento ou ID ("avalie o Evento 68") manda as páginas desse ato direto para a IA.
+- *Padronizar lista* converte texto do assistente colado nas observações em atos (`origem - data - ato`), busca a data no índice de eventos do processo e põe tudo em ordem.
