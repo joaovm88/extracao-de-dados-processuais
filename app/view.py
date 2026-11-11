@@ -8,7 +8,7 @@ from . import template as tpl
 from .schemas import FRAUDE_ANALISES, FRAUDE_TIPOS, SHEETS, classify, item_status, manual_text, normalize_fields
 
 ABAS = [("execucoes_fiscais", "Execuções Fiscais"), ("outras_acoes", "Outras Ações"), ("embargos", "Embargos"),
-        ("bens", "Outros Bens"), ("fraude", "Fraudes")]
+        ("bens", "Outros Bens"), ("fraude", "Fraudes"), ("rj", "Recuperação Judicial")]
 BENS_COLS = [("matricula", "Matrícula"), ("caracteristicas", "Características do Imóvel"), ("proprietario", "Proprietário"),
              ("ato", "Ato (Nº R./Av.)"), ("gravames", "Gravames"), ("resumo", "Resumo"), ("situacao", "Situação")]
 FRAUDE_COLS = [("tipo", "Tipo de fraude alegada"), ("analise", "Análise do pedido"), ("valor_causa", "Valor da causa")]
@@ -41,9 +41,24 @@ def template_columns(data: bytes) -> dict[str, list[dict]]:
     return out
 
 
+def resumo_rj(res: dict) -> dict:
+    """O que a aba Recuperação Judicial mostra de cada processo (o relatório completo abre numa janela própria)."""
+    from . import rj
+
+    rel = res["relatorio"]
+    c = rel.get("campos") or {}
+    v = lambda k: (c.get(k) or {}).get("valor")
+    calc = rj.calcular(rel)
+    return {"numero_rj": v("numero_rj"), "vara": v("vara"), "administrador": v("administrador_judicial"),
+            "empresas": [e.get("nome") for e in rel.get("empresas") or [] if e.get("nome")],
+            "ajuizamento": v("data_ajuizamento"), "deferimento": v("data_deferimento"), "concessao": v("data_concessao"),
+            "aprovado": v("aprovado_agc"), "homologado": v("homologado"), "encerrada": v("encerrada"),
+            "situacao": v("situacao_atual"), "desagio": calc.get("desagio"), "avisos": len(calc["avisos"]), "nao_consta": len(calc["nao_consta"])}
+
+
 def build(processes: list[dict], docs: list[dict], template_bytes: Optional[bytes], estado) -> dict:
     tcols = template_columns(template_bytes) if template_bytes else {}
-    abas = [{"key": k, "titulo": t, "colunas": tcols.get(k) or (default_columns(k) if k in SHEETS else
+    abas = [{"key": k, "titulo": t, "colunas": [] if k == "rj" else tcols.get(k) or (default_columns(k) if k in SHEETS else
             [{"key": a, "titulo": b, "opcoes": None, "fonte": "ai"} for a, b in (BENS_COLS if k == "bens" else FRAUDE_COLS)])}
             for k, t in ABAS]
     by_num: dict[str, list[dict]] = {}
@@ -63,8 +78,10 @@ def build(processes: list[dict], docs: list[dict], template_bytes: Optional[byte
         else:
             campos = res.get("fields") or {}
             valores.update(normalize_fields(SHEETS[res["sheet"]], campos) if res.get("sheet") in SHEETS else campos)
-        aba = res.get("sheet") or classify(m.get("classe") or p.get("classe") or "")[0]
+        aba = res.get("sheet") or ("rj" if any(d.get("tipo") == "recuperacao_judicial" for d in by_num.get(p["numero"], []))
+                                   else classify(m.get("classe") or p.get("classe") or "")[0])
         linhas.append({
+            "rj": resumo_rj(res) if aba == "rj" and res.get("relatorio") else None,
             "numero": p["numero"], "aba": aba, "estado": estado(p), "reviewed": bool(p.get("reviewed")), "error": p.get("error"),
             "valores": valores, "citacoes": {} if manual else res.get("citacoes") or {}, "citacoes_invalidas": [] if manual else res.get("citacoes_invalidas") or [],
             "sistema": res.get("sistema"), "modelo": res.get("prompt"), "paginas": res.get("paginas"), "modo": res.get("modo"),

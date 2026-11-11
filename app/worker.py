@@ -194,7 +194,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
         tipo = proc.get("tipo") or next((d["tipo"] for d in docs if d.get("tipo")), None)
         sistema = next((d["sistema"] for d in docs if d.get("sistema")), None)
         sheet_key, prompt = resolve_tipo(tipo, classe)
-        sheet = SHEETS[sheet_key]
+        sheet = SHEETS.get(sheet_key)  # None: Recuperação Judicial (relatório próprio, sem planilha)
         result = {"sheet": sheet_key, "prompt": prompt, "fields": {"digitalizado": "SIM"}, "bens": [], "fraudes": [],
                   "citacoes": {}, "revisar": [], "modo": "sem_llm", "sistema": sistema, "citacoes_invalidas": [],
                   "documentos": [d["filename"] for d in docs], "paginas": len(pages)}
@@ -209,10 +209,19 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             else:
                 context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
             t_ia = time.perf_counter()
-            out = ex.extract_with_llm(sheet, prompt, context, llm, sistema, com_indice=usar_eventos)
+            out = (ex.extract_rj(prompt, context, llm, sistema, com_indice=usar_eventos) if sheet is None
+                   else ex.extract_with_llm(sheet, prompt, context, llm, sistema, com_indice=usar_eventos))
             result["medidas"] = {"contexto": info, "tokens": getattr(llm, "last_usage", None),
                                  "extracao_s": round(time.perf_counter() - t_ia, 1),
                                  "chamada": getattr(llm, "last_call", None)}
+            if sheet is None:  # Recuperação Judicial: o relatório fica em result["relatorio"]; as citações são conferidas com o PDF
+                from . import rj
+                result.update(fields={}, relatorio=out, modo="llm", provedor=llm.name)
+                result["citacoes_invalidas"] = ex.check_citations(rj.textos(out), pages, sistema)
+                db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema,
+                                     reviewed=0, error=None, ext_finished_at=time.time(), ext_status="ok")
+                db.add_history(case_id, numero, "Extração pela IA", f"relatório de RJ · {len(pages)} página(s) lidas", {"result": result, "reviewed": 0})
+                return
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result["fields"]["observacoes"] = ex.format_cronologia(result["fields"].get("observacoes"))  # um ato por linha
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],
@@ -225,6 +234,8 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             texts = [str(v) for v in result["fields"].values() if v] + list(result["citacoes"].values())
             texts += [str(v) for b in result["bens"] + result["fraudes"] for v in b.values() if v]
             result["citacoes_invalidas"] = ex.check_citations(texts, pages, sistema)
+        elif sheet is None:
+            raise RuntimeError("O relatório de Recuperação Judicial precisa da IA: configure GEMINI_API_KEY ou ANTHROPIC_API_KEY.")
         else:
             result["fields"]["observacoes"] = (
                 f"{NAO_ENCONTRADO}: extração por IA indisponível (nenhuma chave de LLM configurada: GEMINI_API_KEY ou ANTHROPIC_API_KEY).")

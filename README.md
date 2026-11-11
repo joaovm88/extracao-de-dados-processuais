@@ -152,3 +152,12 @@ Botão **📥 Mcfly** na barra da planilha. Envie o .xlsx gerado no Mcfly (SAJ);
 - Se o índice de busca se perdeu (modo sem Docker reiniciado, Elasticsearch recriado), ele é refeito a partir das páginas já lidas e guardadas em disco: na partida (modo em memória) e, em qualquer modo, quando uma pergunta não acha nada. Não é preciso reenviar os PDFs.
 - Pergunta que cita um evento ou ID ("avalie o Evento 68") manda as páginas desse ato direto para a IA.
 - *Padronizar lista* converte texto do assistente colado nas observações em atos (`origem - data - ato`), busca a data no índice de eventos do processo e põe tudo em ordem.
+
+## Relatório de Recuperação Judicial (Word e PDF)
+
+Ao enviar os PDFs de uma RJ, escolha o tipo **Recuperação Judicial**. O processo vai para a aba **Recuperação Judicial** (e não para a planilha de execuções): a IA preenche o relatório (`prompts/recuperacao_judicial.md`, no estilo do relatório da procuradoria, em texto corrido e sem marcadores), cada informação com a sua origem (Evento/ID e página), que é conferida com o PDF.
+
+- **Seções:** identificação, plano de recuperação, bens e endividamento, andamento, interesse da Fazenda Nacional (créditos da União, manifestações, certidão do art. 57, transação, alienações), análise adicional e observações (cronologia por data).
+- **Cálculos pelo código:** deságio ponderado geral (valor de cada classe no QGC × deságio de cada classe) com a memória de cálculo, totais de bens e conferência das somas do QGC. A IA só extrai os números.
+- **Revisão:** *📄 Abrir relatório* mostra todos os campos para editar (valor e origem), com as tabelas de empresas, classes, bens, QGC e a cronologia; campos sem informação saem como "Não consta nos documentos analisados".
+- **Entrega:** *⬇ Word* (.docx) e *⬇ PDF*, gerados do mesmo conteúdo. Sugestão de envio: inicial, decisão de deferimento, plano e aditivos, laudos, ata da assembleia, homologação e relatórios da administração judicial.

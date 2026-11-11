@@ -209,18 +209,19 @@ def citation_rule(sistema) -> str:
     return "- Use apenas rótulos que existam nos trechos; omita as partes do formato (VOL/ID/Evento) que não existirem.\n"
 
 
-def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False) -> dict:
-    """Chama o LLM (Gemini ou Anthropic) com saída JSON restrita ao schema da aba."""
+def _system_extracao(prompt_name: str, sistema=None, com_indice: bool = False, rotulo_saida: str = "observacoes") -> str:
+    """Prompt do analista + orientações da PGFN + regras de saída (citações por sistema, índice autoritativo, datas e valores)."""
     import datetime
 
     orient = load_orientacoes()
-    system = (
+    return (
         load_prompt(prompt_name)
         + (f"\n\n---\nORIENTAÇÕES DA PGFN (procedimentos e critérios de análise; aplique-os ao interpretar os autos):\n{orient}" if orient else "")
         + "\n\n---\nREGRAS DE SAÍDA ESTRUTURADA:\n"
         f"- Data de hoje: {datetime.date.today():%d/%m/%Y}. Datas SEMPRE no formato dd/mm/aaaa. Valores SEMPRE em reais, no formato 'R$ 1.234,56'.\n"
-        "- Devolva os campos pedidos no schema. 'observacoes' recebe o relatório no formato do prompt acima.\n"
-        "- Cada trecho do processo vem com um rótulo entre colchetes; copie EXATAMENTE esses rótulos nas citações. NUNCA invente nº de evento, ID ou página.\n"
+        + ("- Devolva os campos pedidos no schema. 'observacoes' recebe o relatório no formato do prompt acima.\n" if rotulo_saida == "observacoes"
+           else "- Devolva os campos pedidos no schema, seguindo o prompt acima.\n")
+        + "- Cada trecho do processo vem com um rótulo entre colchetes; copie EXATAMENTE esses rótulos nas citações. NUNCA invente nº de evento, ID ou página.\n"
         + citation_rule(sistema) +
         "- Campos de lista fechada só aceitam os valores permitidos; se não houver base nos autos, use null.\n"
         f"- Nunca invente. Sem base no texto, use null (ou '{NAO_ENCONTRADO}' dentro de 'observacoes')."
@@ -233,7 +234,20 @@ def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=
            "Só os atos marcados 'texto integral: sim' vêm transcritos; para os demais NÃO presuma o conteúdo: descreva apenas o que o índice informa ou omita o ato. "
            "Na cronologia, cite cada ato como 'Evento N, pg. P' e use a data do índice." if com_indice and sistema != "pje" else "")
     )
+
+
+def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False) -> dict:
+    """Chama o LLM (Gemini ou Anthropic) com saída JSON restrita ao schema da aba."""
+    system = _system_extracao(prompt_name, sistema, com_indice)
     return validate(sheet, llm.extract(system, f"Processo para análise:\n\n{context}", tool_schema(sheet)))
+
+
+def extract_rj(prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False) -> dict:
+    """Relatório de Recuperação Judicial: a IA preenche campos (valor + origem), tabelas e a cronologia; o código padroniza e calcula."""
+    from . import rj
+
+    system = _system_extracao(prompt_name, sistema, com_indice, rotulo_saida="relatorio")
+    return rj.normalizar(llm.extract(system, f"Processo para análise:\n\n{context}", rj.schema()))
 
 
 def validate(sheet: Sheet, data: dict) -> dict:

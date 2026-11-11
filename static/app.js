@@ -17,7 +17,8 @@ let panelOpen = innerWidth > 900 ? store.get('painel') !== '0' : false;
 let filtro = {q: '', st: ''};
 // tamanhos ajustáveis (por caso, no navegador): larguras por aba/coluna, alturas por processo e densidade das linhas
 let tam = {larg: {}, alt: {}, dens: 'normal'};
-const defW = k => ({__first: 300, observacoes: 320, corresponsaveis: 380, inscricoes: 220, somatorio: 200}[k] ?? 150);
+const defW = k => ({__first: 300, observacoes: 320, corresponsaveis: 380, inscricoes: 220, somatorio: 200, rj_emp: 300, rj_vara: 260, rj_datas: 240, rj_and: 340, rj_rel: 200}[k] ?? 150);
+const RJ_COLS = [{key: 'rj_emp', titulo: 'Empresas recuperandas', fonte: 'rj'}, {key: 'rj_vara', titulo: 'Vara e administrador judicial', fonte: 'rj'}, {key: 'rj_datas', titulo: 'Datas', fonte: 'rj'}, {key: 'rj_and', titulo: 'Andamento', fonte: 'rj'}, {key: 'rj_rel', titulo: 'Relatório (Word / PDF)', fonte: 'rj'}];
 const wOf = (a, k) => tam.larg[a]?.[k] ?? defW(k);
 function loadTam() { try { const t = JSON.parse(store.get('tam:' + caseId) || '{}'); tam = {larg: t.larg || {}, alt: t.alt || {}, dens: t.dens || 'normal'}; } catch (_) { tam = {larg: {}, alt: {}, dens: 'normal'}; } }
 const saveTam = () => store.set('tam:' + caseId, JSON.stringify(tam));
@@ -25,7 +26,7 @@ const LONG = ['observacoes', 'corresponsaveis'];  // colunas de texto longo: abr
 const chats = {};  // histórico do assistente por processo (só nesta sessão do navegador)
 const ESTADO = {pronto: ['ok', 'pronto'], extraindo: ['warn', 'extraindo…'], aguardando: ['warn', 'aguardando PDFs'], desatualizado: ['warn', 'novas partes'], erro: ['err', 'erro'], sem_pdf: ['', 'sem PDF'], manual: ['blue', 'feito manualmente']};
 const DST = {queued: ['warn', 'na fila'], processing: ['warn', 'processando'], done: ['ok', 'lido'], error: ['err', 'erro']};
-const MODELO = {execucoes_fiscais: 'Execução fiscal', outras_acoes: 'Outras ações', recursos: 'Recursos'};
+const MODELO = {execucoes_fiscais: 'Execução fiscal', outras_acoes: 'Outras ações', recursos: 'Recursos', recuperacao_judicial: 'Recuperação Judicial'};
 async function copiar(txt, msg = 'Copiado') {
   try { await navigator.clipboard.writeText(txt); }
   catch (_) { const t = document.createElement('textarea'); t.value = txt; t.style.position = 'fixed'; t.style.opacity = '0'; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); } catch (__) { /* sem cópia */ } t.remove(); }
@@ -142,7 +143,7 @@ function passa(l) {
     if (!ok) return false;
   }
   const termos = norm(filtro.q).split(/\s+/).filter(Boolean); if (!termos.length) return true;
-  const palha = norm(`${l.numero} ${Object.values(l.valores).join(' ')}`); return termos.every(t => palha.includes(t));
+  const palha = norm(`${l.numero} ${Object.values(l.valores).join(' ')} ${l.rj ? JSON.stringify(l.rj) : ''}`); return termos.every(t => palha.includes(t));
 }
 const passaItem = i => { const termos = norm(filtro.q).split(/\s+/).filter(Boolean); const p = norm(Object.values(i).join(' ')); return termos.every(t => p.includes(t)); };
 function updateFilterUI(shown, total) {
@@ -191,7 +192,7 @@ function renderGrid() {
   }
   updateFilterUI(linhas.length, todas.filter(l => !l.oculto).length);
   const pos = new Map(todas.filter(l => !l.oculto).map((l, i) => [l.numero, i + 1]));  // nº de ordem do processo na aba (não muda ao filtrar)
-  const cols = a.colunas.filter(c => c.key !== 'numero');
+  const cols = aba === 'rj' ? RJ_COLS : a.colunas.filter(c => c.key !== 'numero');
   table.innerHTML = gridHead(['__first', ...cols.map(c => c.key)], [{text: 'Processo'}, ...cols.map(c => ({text: c.titulo, title: c.titulo}))]) + `<tbody>${linhas.map(l => {
     const [cls, txt] = ESTADO[l.estado], ed = editable(l), waiting = ['extraindo', 'aguardando'].includes(l.estado);
     const rc = (l.numero === sel ? 'sel ' : '') + (l.estado === 'erro' ? 'bad' : ed && l.reviewed ? 'okrow' : ed ? 'pend' : '');
@@ -210,7 +211,20 @@ function ato(linha) {  // '<origem> - dd/mm/aaaa - descrição' -> data em negri
   const m = String(linha).match(/^(.+?)\s+-\s+(\d{2}\/\d{2}\/\d{4}|data não informada)\s+-\s+(.+)$/);
   return m ? `<div class="li"><b>${esc(m[2])}</b> ${esc(m[3])} <span class="ori">${esc(m[1])}</span></div>` : `<div class="li">${esc(linha)}</div>`;
 }
+const dl = u => `/api/cases/${caseId}/processes/${enc(u)}`;
+function rjCell(l, c, waiting) {  // aba Recuperação Judicial: resumo do relatório + abrir/baixar
+  const W = inner => `<td><div class="cc">${inner}</div></td>`, r = l.rj;
+  if (!r) return W(waiting ? '<div class="shim"></div>' : c.key === 'rj_rel' && l.estado === 'sem_pdf' ? '<div class="wait">Envie os PDFs da RJ</div>' : '<div class="wait">—</div>');
+  const v = x => x ? esc(x) : '<span class="muted">—</span>';
+  if (c.key === 'rj_emp') return W(`<div class="rj-c">${(r.empresas.slice(0, 4).map(e => `<div>${esc(e)}</div>`).join('')) || '<span class="muted">—</span>'}${r.empresas.length > 4 ? `<div class="mais">+${r.empresas.length - 4} empresa(s)</div>` : ''}</div>`);
+  if (c.key === 'rj_vara') return W(`<div class="rj-c"><div>${v(r.vara)}</div><div class="muted">Administração judicial: ${v(r.administrador)}</div></div>`);
+  if (c.key === 'rj_datas') return W(`<div class="rj-c"><div><span class="muted">Ajuizamento:</span> ${v(r.ajuizamento)}</div><div><span class="muted">Deferimento:</span> ${v(r.deferimento)}</div><div><span class="muted">Concessão:</span> ${v(r.concessao)}</div></div>`);
+  if (c.key === 'rj_and') return W(`<div class="rj-c"><div class="rj-tags">${r.aprovado ? `<span class="tag ${r.aprovado === 'SIM' ? 'ok' : 'warn'}">Assembleia: ${esc(r.aprovado)}</span>` : ''}${r.homologado ? `<span class="tag ${r.homologado === 'SIM' ? 'ok' : 'warn'}">Homologado: ${esc(r.homologado)}</span>` : ''}${r.encerrada ? `<span class="tag">Encerrada: ${esc(r.encerrada)}</span>` : ''}${r.desagio != null ? `<span class="tag blue" title="Média do deságio de cada classe, ponderada pelo valor da classe no QGC">Deságio ponderado ${String(r.desagio).replace('.', ',')}%</span>` : ''}</div><div class="clamp rj-sit">${v(r.situacao)}</div></div>`);
+  return W(`<div class="rj-c"><div class="acts"><button type="button" class="btn sm primary" data-rj-open="${esc(l.numero)}">📄 Abrir relatório</button><button type="button" class="btn sm" data-rj-dl="docx|${esc(l.numero)}">⬇ Word</button><button type="button" class="btn sm" data-rj-dl="pdf|${esc(l.numero)}">⬇ PDF</button></div>
+    ${r.avisos ? `<span class="tag warn" title="Somas e totais que não fecham: abra o relatório">${r.avisos} ponto(s) a conferir</span>` : ''}<span class="muted">${r.nao_consta} campo(s) sem informação</span></div>`);
+}
 function cell(l, c, ed, waiting) {
+  if (c.fonte === 'rj') return rjCell(l, c, ['extraindo', 'aguardando'].includes(l.estado));
   const v = l.valores[c.key] ?? '', tip = l.citacoes[c.key] ? ` title="Origem: ${esc(l.citacoes[c.key])}"` : '';
   const W = (inner, cls = '') => `<td${cls ? ` class="${cls}"` : ''}${tip}><div class="cc">${inner}</div></td>`;
   if (c.fonte !== 'ai') return W(esc(v), 'c ro');  // capa (Mcfly) e campos do sistema: somente leitura
@@ -286,6 +300,8 @@ $('grid').addEventListener('keydown', e => {
 $('grid').addEventListener('click', e => {
   if (e.target.closest('.rz,.rzr')) return;
   const cp = e.target.closest('[data-copy]'); if (cp) { e.stopPropagation(); return copiar(cp.dataset.copy, 'Número copiado'); }
+  const ro = e.target.closest('[data-rj-open]'); if (ro) { e.stopPropagation(); return openRj(ro.dataset.rjOpen); }
+  const rd = e.target.closest('[data-rj-dl]'); if (rd) { e.stopPropagation(); const [f, n] = rd.dataset.rjDl.split('|'); return void (location.href = `${dl(n)}/rj.${f}`); }
   const ia = e.target.closest('[data-item-act]'); if (ia) { const [lista, numero, i] = ia.closest('tr').dataset.item.split('|'); return itemAcao(lista, numero, [+i], ia.dataset.itemAct); }
   const tr = e.target.closest('tbody tr'); if (!tr || !tr.dataset.n) return;
   const lg = e.target.closest('[data-long]'); if (lg) openLong(tr.dataset.n, lg.dataset.long);
@@ -354,6 +370,7 @@ function renderAssistInfo() {
       ${l.n_eventos ? `<button class="btn sm" data-eventos title="Todos os eventos lidos do PDF, sem IA">📅 Eventos (${l.n_eventos})</button>` : ''}
       ${!l.manual?.ativo ? '<button class="btn sm" data-manual-on title="Registra que este processo foi feito à mão: a IA não o extrai e a planilha mostra isso nas observações">✍ Feito manualmente</button>' : ''}
       ${l.docs.length && !l.manual?.ativo ? `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>` : ''}</div>
+    ${l.aba === 'rj' && l.rj ? `<div class="acts"><button class="btn sm primary" data-rj-open="${esc(l.numero)}">📄 Abrir relatório</button><button class="btn sm" data-rj-dl="docx|${esc(l.numero)}">⬇ Word</button><button class="btn sm" data-rj-dl="pdf|${esc(l.numero)}">⬇ PDF</button></div>` : ''}
     <div class="acts sec">${l.estado !== 'sem_pdf' || l.manual?.ativo ? '<button class="btn sm" data-hist title="Versões anteriores deste processo, com a opção de voltar">🕘 Histórico</button>' : ''}
       <button class="btn sm" data-ocultar title="${l.oculto ? 'Volta a aparecer na tabela e na planilha' : 'Tira da tabela e da planilha exportada, sem apagar nada'}">${l.oculto ? '👁 Reexibir' : '🙈 Ocultar'}</button>
       <button class="btn sm danger-btn" data-excluir title="Apaga o processo, os PDFs e o histórico dele">🗑 Excluir processo</button></div>
@@ -361,6 +378,8 @@ function renderAssistInfo() {
   const q = (s) => $('assist-info').querySelector(s);
   q('[data-again]') && (q('[data-again]').onclick = () => reextract(l.numero, false));
   q('[data-copy-err]') && (q('[data-copy-err]').onclick = async () => { try { await navigator.clipboard.writeText(`${l.numero}\n${l.error}`); toast('Copiado', 'ok'); } catch (_) { toast('Não foi possível copiar', 'err'); } });
+  $('assist-info').querySelectorAll('[data-rj-open]').forEach(b => b.onclick = () => openRj(b.dataset.rjOpen));
+  $('assist-info').querySelectorAll('[data-rj-dl]').forEach(b => b.onclick = () => { const [f, n] = b.dataset.rjDl.split('|'); location.href = `${dl(n)}/rj.${f}`; });
   q('[data-hist]') && (q('[data-hist]').onclick = () => openHist(l.numero));
   q('[data-ocultar]') && (q('[data-ocultar]').onclick = () => setOculto(l.numero, !l.oculto));
   q('[data-excluir]') && (q('[data-excluir]').onclick = () => excluirProcesso(l.numero));
@@ -458,6 +477,71 @@ $('mcfly-ok').onclick = async () => {
   try { const r = await api(`/api/cases/${caseId}/mcfly`, {method: 'POST', body: fd}); toast(`Mcfly importado: ${r.atualizados} processo(s) atualizado(s), ${r.novos} novo(s)`, 'ok'); $('dlg-mcfly').close(); refresh(true); }
   catch (err) { $('mcfly-msg').className = 'msg err'; $('mcfly-msg').textContent = err.message; $('mcfly-ok').disabled = false; }
 };
+
+/* ---------- Recuperação Judicial: relatório editável (Word / PDF) ---------- */
+let rjd = null, rjDirty = false, rjReg = [];
+async function openRj(numero) {
+  try { const r = await api(`${dl(numero)}/rj`); rjd = {...r, numero}; rjDirty = false; } catch (e) { return toast(e.message, 'err'); }
+  $('rj-sub').textContent = numero; $('rj-rev').checked = rjd.reviewed; renderRj(); $('dlg-rj').showModal(); rjAuto();
+}
+const inp = (cls, attrs, v) => `<input class="${cls}" ${attrs} value="${esc(v ?? '')}">`;
+function rjTabela(lista, cols, vazio) {  // tabela editável genérica: lista = array de objetos do relatório
+  const id = rjReg.push({lista, cols}) - 1;
+  return `<div class="rj-tab"><table class="plain"><thead><tr>${cols.map(c => `<th style="width:${c.w}%">${esc(c.t)}</th>`).join('')}<th></th></tr></thead><tbody>${lista.map((it, i) => `<tr>${cols.map(c => `<td>${c.sel
+    ? `<select data-rj-t="${id}|${i}|${c.k}"><option value=""></option>${c.sel.map(o => `<option ${it[c.k] === o ? 'selected' : ''}>${esc(o)}</option>`).join('')}</select>`
+    : inp('rj-in', `data-rj-t="${id}|${i}|${c.k}"${c.num ? ' inputmode="decimal"' : ''}`, it[c.k])}</td>`).join('')}<td><button type="button" class="icon-btn" data-rj-del="${id}|${i}" title="Remover linha" aria-label="Remover linha">✕</button></td></tr>`).join('') || `<tr><td colspan="${cols.length + 1}" class="muted">${esc(vazio)}</td></tr>`}</tbody></table>
+    <button type="button" class="btn sm" data-rj-add="${id}">+ Adicionar linha</button></div>`;
+}
+function renderRj() {
+  rjReg = []; const rel = rjd.rel = rjd.relatorio, c = rel.campos, calc = rjd.calculo;
+  const campo = f => { const x = c[f.chave] ||= {valor: null, origem: null};
+    const ent = f.tipo === 'paragrafo' ? `<textarea class="rj-ta" rows="3" data-rj-k="${f.chave}">${esc(x.valor ?? '')}</textarea>`
+      : f.tipo === 'simnao' ? `<select data-rj-k="${f.chave}"><option value=""></option><option ${x.valor === 'SIM' ? 'selected' : ''}>SIM</option><option ${x.valor === 'NÃO' ? 'selected' : ''}>NÃO</option></select>`
+      : inp('rj-in', `data-rj-k="${f.chave}" placeholder="${f.tipo === 'data' ? 'dd/mm/aaaa' : f.tipo === 'moeda' ? 'R$ 0,00' : ''}"`, x.valor);
+    return `<div class="rj-f ${x.valor ? '' : 'vazio'}" title="${esc(f.dica)}"><label>${esc(f.rotulo)}</label>${ent}${inp('rj-in rj-or', `data-rj-o="${f.chave}" placeholder="Origem (ex.: ID 123, pg. 4)"`, x.origem)}</div>`; };
+  const cabeca = `<div class="rj-resumo"><div class="kpis"><div class="kpi"><span>Deságio ponderado geral<i class="tip" tabindex="0" data-tip="Média do deságio de cada classe, ponderada pelo valor da classe no quadro de credores. Calculada pelo sistema a partir das tabelas abaixo.">*</i></span><b>${calc.desagio != null ? String(calc.desagio).replace('.', ',') + '%' : '—'}</b><small>${calc.base ? `base ${esc(calc.base)}` : 'preencha o valor e o deságio de cada classe'}</small></div>
+    <div class="kpi"><span>Campos sem informação</span><b>${calc.nao_consta.length}</b><small>saem como “Não consta nos documentos analisados”</small></div>
+    <div class="kpi"><span>Pontos a conferir</span><b>${calc.avisos.length + rjd.citacoes_invalidas.length}</b><small>somas e citações</small></div></div>
+    ${calc.avisos.map(a => `<div class="alert warn">${esc(a)}</div>`).join('')}${rjd.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(rjd.citacoes_invalidas.join('; '))}</div>` : ''}</div>`;
+  const tabs = {
+    identificacao: () => `<h4>Empresas recuperandas</h4>${rjTabela(rel.empresas, [{k: 'nome', t: 'Empresa', w: 42}, {k: 'cnpj', t: 'CNPJ', w: 22}, {k: 'em_recuperacao_judicial', t: 'Consta “em recuperação judicial”?', w: 16, sel: ['SIM', 'NÃO']}, {k: 'origem', t: 'Origem', w: 16}], 'Nenhuma empresa informada.')}`,
+    plano: () => `<h4>Classes de credores (valor no QGC e deságio, base do cálculo do deságio ponderado)</h4>${rjTabela(rel.classes, [{k: 'classe', t: 'Classe', w: 24}, {k: 'proposta', t: 'Proposta de pagamento (resumo)', w: 30}, {k: 'valor_sujeito', t: 'Valor sujeito (R$)', w: 18, num: 1}, {k: 'desagio_percentual', t: 'Deságio (%)', w: 10, num: 1}, {k: 'origem', t: 'Origem', w: 12}], 'Nenhuma classe informada.')}`,
+    bens: () => `<h4>Bens do laudo de avaliação</h4>${rjTabela(rel.bens, [{k: 'tipo', t: 'Bem', w: 28}, {k: 'valor_mercado', t: 'Valor de mercado', w: 20, num: 1}, {k: 'valor_liquidacao', t: 'Liquidação forçada', w: 20, num: 1}, {k: 'localidade', t: 'Localidade', w: 16}, {k: 'origem', t: 'Origem', w: 16}], 'Nenhum bem informado.')}
+      <h4>Quadros gerais de credores (QGC)</h4>${rel.qgc.map(q => `<div class="rj-qgc"><div class="rj-qh">${inp('rj-in', `data-rj-q="${rel.qgc.indexOf(q)}|fonte" placeholder="Fonte"`, q.fonte)}${inp('rj-in', `data-rj-q="${rel.qgc.indexOf(q)}|data" placeholder="dd/mm/aaaa"`, q.data)}${inp('rj-in', `data-rj-q="${rel.qgc.indexOf(q)}|total" placeholder="Total R$"`, q.total)}${inp('rj-in', `data-rj-q="${rel.qgc.indexOf(q)}|origem" placeholder="Origem"`, q.origem)}<button type="button" class="icon-btn" data-rj-delq="${rel.qgc.indexOf(q)}" title="Remover este quadro">✕</button></div>${rjTabela(q.classes, [{k: 'classe', t: 'Classe', w: 60}, {k: 'valor', t: 'Valor (R$)', w: 40, num: 1}], 'Sem classes.')}</div>`).join('') || '<p class="muted">Nenhum quadro informado.</p>'}
+      <button type="button" class="btn sm" id="rj-addq">+ Adicionar quadro</button>`,
+    observacoes: () => rjTabela(rel.observacoes, [{k: 'data', t: 'Data', w: 14}, {k: 'texto', t: 'Ato', w: 62}, {k: 'origem', t: 'Origem', w: 24}], 'Nenhum ato informado.'),
+  };
+  $('rj-body').innerHTML = cabeca + rjd.secoes.map(sc => `<section class="rj-sec"><h3>${esc(sc.titulo)}</h3>${sc.chave === 'observacoes' ? '' : rjd.campos.filter(f => f.secao === sc.chave).map(campo).join('')}${tabs[sc.chave] ? tabs[sc.chave]() : ''}</section>`).join('');
+  rjAuto();
+}
+function rjAuto() {  // textareas crescem com o texto (só depois de a janela estar visível, senão a altura medida é 0)
+  $('rj-body').querySelectorAll('textarea.rj-ta').forEach(t => { t.style.height = 'auto'; t.style.height = Math.max(64, Math.min(t.scrollHeight + 2, 320)) + 'px'; });
+}
+$('rj-body').addEventListener('input', e => {
+  const t = e.target; rjDirty = true;
+  if (t.matches('[data-rj-k]')) { rjd.rel.campos[t.dataset.rjK].valor = t.value || null; t.closest('.rj-f').classList.toggle('vazio', !t.value); if (t.matches('textarea')) { t.style.height = 'auto'; t.style.height = Math.max(64, Math.min(t.scrollHeight + 2, 320)) + 'px'; } }
+  else if (t.matches('[data-rj-o]')) rjd.rel.campos[t.dataset.rjO].origem = t.value || null;
+  else if (t.matches('[data-rj-t]')) { const [id, i, k] = t.dataset.rjT.split('|'), it = rjReg[+id].lista[+i]; it[k] = k === 'desagio_percentual' ? (t.value === '' ? null : t.value) : (t.value || null); }
+  else if (t.matches('[data-rj-q]')) { const [i, k] = t.dataset.rjQ.split('|'); rjd.rel.qgc[+i][k] = t.value || null; }
+});
+$('rj-body').addEventListener('change', e => { if (e.target.matches('select[data-rj-t]')) e.target.dispatchEvent(new Event('input', {bubbles: true})); });
+$('rj-body').addEventListener('click', e => {
+  const add = e.target.closest('[data-rj-add]'), del = e.target.closest('[data-rj-del]'), dq = e.target.closest('[data-rj-delq]');
+  if (add) { const r = rjReg[+add.dataset.rjAdd]; r.lista.push(Object.fromEntries(r.cols.map(c => [c.k, null]))); rjDirty = true; renderRj(); }
+  if (del) { const [id, i] = del.dataset.rjDel.split('|'); rjReg[+id].lista.splice(+i, 1); rjDirty = true; renderRj(); }
+  if (dq) { rjd.rel.qgc.splice(+dq.dataset.rjDelq, 1); rjDirty = true; renderRj(); }
+  if (e.target.id === 'rj-addq') { rjd.rel.qgc.push({fonte: null, data: null, origem: null, total: null, classes: []}); rjDirty = true; renderRj(); }
+});
+async function rjSalvar() {
+  try {
+    const r = await api(`${dl(rjd.numero)}/rj`, json('PUT', {relatorio: rjd.rel, reviewed: $('rj-rev').checked}));
+    rjDirty = false; toast('Relatório salvo', 'ok'); const n = await api(`${dl(rjd.numero)}/rj`); rjd = {...n, numero: rjd.numero}; renderRj(); refresh(true); return true;
+  } catch (e) { toast(e.message, 'err'); return false; }
+}
+$('rj-save').onclick = rjSalvar;
+['rj-word', 'rj-pdf'].forEach(id => $(id).onclick = async e => { e.preventDefault(); if (rjDirty && !(await rjSalvar())) return; location.href = `${dl(rjd.numero)}/rj.${id === 'rj-word' ? 'docx' : 'pdf'}`; });
+$('dlg-rj').addEventListener('cancel', e => { if (rjDirty && !confirm('Há alterações não salvas no relatório. Fechar mesmo assim?')) e.preventDefault(); });
+$('dlg-rj').querySelectorAll('button[value=x]').forEach(b => b.addEventListener('click', e => { if (rjDirty && !confirm('Há alterações não salvas no relatório. Fechar mesmo assim?')) e.preventDefault(); }));
 
 /* histórico de versões */
 let histFor = null;

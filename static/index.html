@@ -151,6 +151,13 @@
   <footer><span class="muted" id="mcfly-count"></span><span class="spacer"></span><button class="btn" value="x">Cancelar</button><button class="btn primary" id="mcfly-ok" type="button" disabled>Importar selecionados</button></footer>
 </form></dialog>
 
+<dialog id="dlg-rj" class="xwide"><form method="dialog" class="dlg">
+  <header><div><h2>Relatório de Recuperação Judicial</h2><small class="muted" id="rj-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
+  <div class="dlg-body" id="rj-body"></div>
+  <footer><label class="rev" style="font-size:13px"><input type="checkbox" id="rj-rev"> marcar como revisado</label><span class="spacer"></span>
+    <a class="btn" id="rj-word" href="#" title="Salva e baixa o relatório em Word (.docx)">⬇ Word</a><a class="btn" id="rj-pdf" href="#" title="Salva e baixa o relatório em PDF">⬇ PDF</a><button class="btn" value="x">Fechar</button><button class="btn primary" id="rj-save" type="button">Salvar</button></footer>
+</form></dialog>
+
 <dialog id="dlg-hist" class="wide"><form method="dialog" class="dlg">
   <header><div><h2>Histórico do processo</h2><small class="muted" id="hist-sub"></small></div><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
   <div class="dlg-body"><p class="muted">Cada extração, edição, autorização ou restauração guarda uma versão (as 40 mais recentes). Abra uma versão para ver o conteúdo e voltar a ela.</p><div id="hist-list"></div></div>

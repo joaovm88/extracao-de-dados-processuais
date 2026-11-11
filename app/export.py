@@ -6,7 +6,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 
 from .schemas import (BENS_HEADERS, DJE_SIEF_HEADERS, FRAUDE_HEADERS, ORDEM_HEADER, RELATORIO_HEADERS, SHEETS, SITUACAO_HEADER,
-                      classify, itens_autorizados, manual_text, normalize_fields, situacao_analise)
+                      classify, is_rj, itens_autorizados, manual_text, normalize_fields, situacao_analise)
 from .template import item_row
 
 HEAD = PatternFill("solid", fgColor="1351B4")  # azul gov.br
@@ -35,7 +35,7 @@ def _add(ws, row: list, pending: bool = False):
 
 def build_case_xlsx(case: dict, processes: list[dict]) -> bytes:
     """processes: linhas da tabela `processes` (cadastro Mcfly + resultado da extração + revisão)."""
-    processes = [p for p in processes if not p.get("hidden")]  # ocultos não entram na planilha
+    processes = [p for p in processes if not p.get("hidden") and not is_rj(p)]  # ocultos e processos de RJ (relatório próprio) não entram na planilha
     wb = Workbook()
     wb.remove(wb.active)
 

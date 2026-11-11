@@ -122,6 +122,8 @@ MCFLY_MAP = {
 def classify(classe: str) -> tuple[str, str]:
     """Classe do processo -> (aba, prompt)."""
     c = (classe or "").lower()
+    if "recupera" in c and "judicial" in c or "falência" in c or "falencia" in c:
+        return "rj", "recuperacao_judicial"
     if "embargos" in c:
         return "embargos", "outras_acoes"
     if "execução fiscal" in c or "execucao fiscal" in c:
@@ -138,6 +140,7 @@ TIPOS = {
     "apelacao": ("Apelação / Recurso", "outras_acoes", "recursos"),
     "agravo": ("Agravo de Instrumento", "outras_acoes", "recursos"),
     "outras_acoes": ("Outras ações (MS, anulatória, cautelar…)", "outras_acoes", "outras_acoes"),
+    "recuperacao_judicial": ("Recuperação Judicial (relatório em Word/PDF)", "rj", "recuperacao_judicial"),
 }
 SISTEMAS = {"eproc": "eproc", "pje": "PJe"}
 
@@ -153,6 +156,11 @@ def manual_text(proc: dict) -> str:
     """Texto que a planilha mostra no campo de observações de um processo feito manualmente."""
     nota = (proc.get("manual_note") or "").strip()
     return "Processo analisado manualmente." + (f" {nota}" if nota else "")
+
+
+def is_rj(proc: dict) -> bool:
+    """Processo de Recuperação Judicial: tem relatório próprio e não entra na planilha de execuções."""
+    return ((proc.get("result") or {}).get("sheet") == "rj") or proc.get("sheet") == "rj"
 
 
 def situacao_analise(proc: dict) -> str:

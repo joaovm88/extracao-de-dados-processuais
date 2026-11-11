@@ -13,7 +13,7 @@ from typing import Optional
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
-from .schemas import EXTRA_COLS, SHEETS, normalize_fields, classify, itens_autorizados, manual_text, situacao_analise
+from .schemas import EXTRA_COLS, SHEETS, is_rj, normalize_fields, classify, itens_autorizados, manual_text, situacao_analise
 
 PENDING = PatternFill("solid", fgColor="FFF3CD")  # linhas ainda não revisadas
 
@@ -172,7 +172,7 @@ def item_row(kind: str, proc: dict, item: dict, anterior: Optional[dict] = None)
 
 
 def fill(data: bytes, processes: list[dict]) -> bytes:
-    processes = [p for p in processes if not p.get("hidden")]  # ocultos não entram na planilha
+    processes = [p for p in processes if not p.get("hidden") and not is_rj(p)]  # ocultos e processos de RJ (relatório próprio) não entram na planilha
     wb = load_workbook(io.BytesIO(data))
     for ws in wb.worksheets:
         kind = sheet_kind(ws.title)

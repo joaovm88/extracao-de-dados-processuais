@@ -1314,3 +1314,87 @@ def test_chat_rebuilds_lost_index_and_reads_the_cited_event_directly(env, monkey
     (s.data_dir / "pages" / "docx.json").write_text(__import__("json").dumps(pages), encoding="utf-8")
     hits = rag._citados("Pode avaliar o Evento 68?", [{"id": "docx"}], s)
     assert [h.page for h in hits] == [2] and rag._citados("Qual o último andamento?", [{"id": "docx"}], s) == []
+
+
+RJ_PAYLOAD = {
+    "numero_rj": {"valor": "5001471-26.2023.8.13.0388", "origem": "VOL 001, pg. 1"}, "vara": {"valor": "Vara Única da Comarca de Luz", "origem": None},
+    "data_ajuizamento": {"valor": "2023-05-26", "origem": "VOL 001, pg. 1"}, "data_concessao": {"valor": "09/06/2025", "origem": "VOL 001, pg. 2"},
+    "pagamento_demais": {"valor": "Deságio de 70%, em 162 parcelas mensais, com a primeira ao final do 19º mês.", "origem": "VOL 001, pg. 2"},
+    "aprovado_agc": {"valor": "sim", "origem": "VOL 001, pg. 2"}, "homologado": {"valor": "SIM"}, "divida_total": {"valor": "45689758.53"},
+    "empresas": [{"nome": "Luza Indústria e Comércio de Alimentos S.A", "cnpj": "22.135.959/0006-81", "em_recuperacao_judicial": "SIM"},
+                 {"nome": "Arpere Representações Ltda.", "cnpj": "03.846.999/0001-82", "em_recuperacao_judicial": "SIM"}],
+    "classes": [{"classe": "Classe I – Trabalhistas", "valor_sujeito": "679866.20", "desagio_percentual": 0},
+                {"classe": "Classe III – Quirografários", "valor_sujeito": "R$ 43.511.215,56", "desagio_percentual": 70},
+                {"classe": "Classe IV – ME/EPP", "valor_sujeito": "R$ 1.498.676,77", "desagio_percentual": "70"}],
+    "qgc": [{"fonte": "Recuperandas", "data": "28/08/2023", "total": "R$ 100,00", "classes": [{"classe": "Classe I", "valor": "R$ 10,00"}, {"classe": "Classe III", "valor": "R$ 20,00"}]}],
+    "observacoes": [{"data": "19/10/2023", "texto": "A administradora judicial manifestou-se sobre o plano", "origem": "VOL 001, pg. 3"},
+                    {"data": "19/06/2023", "texto": "Apresentado o relatório de constatação prévia", "origem": "VOL 001, pg. 1"}]}
+
+
+def test_rj_classification_and_report_math_and_no_bullets():
+    from app import rj
+    from app.schemas import classify, resolve_tipo
+    assert classify("Recuperação Judicial")[0] == "rj" and resolve_tipo("recuperacao_judicial", "")[0] == "rj" and classify("Execução Fiscal")[0] == "execucoes_fiscais"
+    rel = rj.normalizar(RJ_PAYLOAD)
+    c = rel["campos"]
+    assert c["data_ajuizamento"]["valor"] == "26/05/2023" and c["aprovado_agc"]["valor"] == "SIM" and c["divida_total"]["valor"] == "R$ 45.689.758,53"
+    assert rel["classes"][0]["valor_sujeito"] == "R$ 679.866,20" and rel["classes"][2]["desagio_percentual"] == 70.0
+    calc = rj.calcular(rel)
+    esperado = (679866.20 * 0 + 43511215.56 * 70 + 1498676.77 * 70) / (679866.20 + 43511215.56 + 1498676.77)
+    assert calc["desagio"] == round(esperado, 2) == 68.96 and calc["base"] == "R$ 45.689.758,53" and len(calc["memoria"]) == 3
+    assert any("QGC (Recuperandas)" in a for a in calc["avisos"])  # classes somam R$ 30,00 mas o total informado é R$ 100,00
+    assert "PAGAMENTO DOS CRÉDITOS TRABALHISTAS (CLASSE I)" in calc["nao_consta"]  # campo não preenchido pela IA
+    texto = "\n".join(" ".join(str(x) for x in b[1:] if isinstance(x, str)) for b in rj.blocos(rel, "5001471-26.2023.8.13.0388"))
+    assert "Em 19/06/2023, apresentado o relatório" in texto and texto.index("19/06/2023") < texto.index("19/10/2023")  # observações em ordem de data
+    assert "Não consta nos documentos analisados." in texto and "DESÁGIO PONDERADO GERAL" in texto and "68,96%" in texto
+    assert not any(ch in texto for ch in "•●▪◦") and "\n- " not in texto  # sem marcadores
+    # sem valor por classe, não inventa o deságio
+    assert rj.calcular(rj.normalizar({"classes": [{"classe": "Classe III", "desagio_percentual": 70}]}))["desagio"] is None
+
+
+def test_rj_end_to_end_report_edit_downloads_and_stays_out_of_the_spreadsheet(env):
+    import docx
+    import pymupdf
+    c, llm, tmp = env
+    llm.payload = dict(RJ_PAYLOAD)
+    cid = c.post("/api/cases", json={"nome": "Grupo Luza"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": ("5001471-26.2023.8.13.0388_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")},
+               data={"case_id": cid, "tipo": "recuperacao_judicial"}).json()
+    wait(c, d["id"])
+    numero = "5001471-26.2023.8.13.0388"
+    base = f"/api/cases/{cid}/processes/{numero}"
+    system = llm.calls[-1]["system"]
+    assert "Relatório de Recuperação Judicial" in system and "NÃO use listas, tópicos, marcadores" in system  # o prompt novo, sem bullets
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    lin = next(l for l in sheet["linhas"] if l["numero"] == numero)
+    assert lin["aba"] == "rj" and lin["rj"]["desagio"] == 68.96 and lin["rj"]["empresas"][0].startswith("Luza") and lin["rj"]["homologado"] == "SIM"
+    assert next(a for a in sheet["abas"] if a["key"] == "rj")["n"] == 1 and next(a for a in sheet["abas"] if a["key"] == "execucoes_fiscais")["n"] == 0
+    rel = c.get(f"{base}/rj").json()
+    assert rel["calculo"]["desagio"] == 68.96 and any(f["chave"] == "fgts" for f in rel["campos"]) and [s["chave"] for s in rel["secoes"]][0] == "identificacao"
+    # edição: o analista corrige um valor e preenche um campo; o deságio é recalculado pelo código
+    r = rel["relatorio"]
+    r["classes"][1]["desagio_percentual"] = "50"
+    r["campos"]["fgts"] = {"valor": "O FGTS está incluído na Classe I.", "origem": "VOL 001, pg. 2"}
+    assert c.put(f"{base}/rj", json={"relatorio": r, "reviewed": True}).json()["calculo"]["desagio"] != 68.96
+    assert c.get(base).json()["reviewed"] == 1 and c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Edição do analista"
+    # Word e PDF
+    w = c.get(f"{base}/rj.docx")
+    assert w.status_code == 200 and "wordprocessingml" in w.headers["content-type"] and "Relatorio RJ" in w.headers["content-disposition"]
+    D = docx.Document(io.BytesIO(w.content))
+    corpo = "\n".join(p.text for p in D.paragraphs)
+    assert "RELATÓRIO – RECUPERAÇÃO JUDICIAL" in corpo and "O FGTS está incluído na Classe I (VOL 001, pg. 2)." in corpo and "Luza Indústria e Comércio de Alimentos S.A" in corpo
+    assert not any(p.style.name.lower().startswith("list") for p in D.paragraphs)  # nenhum parágrafo de lista
+    pdf = pymupdf.open(stream=c.get(f"{base}/rj.pdf").content)
+    assert "DESÁGIO PONDERADO GERAL" in "".join(p.get_text() for p in pdf)
+    # fora da planilha de execuções e sem editar campos de planilha
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    assert all(numero not in [x.value for row in ws.iter_rows() for x in row] for ws in wb.worksheets)
+    assert c.put(f"{base}/review", json={"observacoes": "x", "reviewed": False}).status_code == 400
+    assert c.put(f"{base}/review", json={"reviewed": False}).status_code == 200
+    assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "q", "resposta": "r (VOL 001, pg. 1)"}).status_code == 409
+    # processo que não é de RJ não tem relatório
+    cid2 = c.post("/api/cases", json={"nome": "Outro"}).json()["id"]
+    make_pdf(tmp / "b.pdf")
+    c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "b.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid2})
+    assert c.get(f"/api/cases/{cid2}/processes/{NUM}/rj").status_code == 404

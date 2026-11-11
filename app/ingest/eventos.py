@@ -17,7 +17,9 @@ _DOCN = re.compile(r"^Documento\s+(\d+)$", re.IGNORECASE)
 _FORTE = ("penhora", "bloqueio", "sisbajud", "bacenjud", "renajud", "infojud", "arresto", "avalia", "leilao", "hasta", "arremat",
           "alienacao", "adjudica", "citacao", "citado", "transit", "extin", "excecao", "embargos", "redirecion", "desconsider",
           "parcelament", "suspens", "arquivament", "prescri", "pagamento", "conversao", "alvara", "tutela", "liminar", "agravo",
-          "apelacao", "recurso", "sentenc", "acord", "peticao inicial", "inic", "habilita", "indisponib")
+          "apelacao", "recurso", "sentenc", "acord", "peticao inicial", "inic", "habilita", "indisponib",
+          "recuperacao judicial", "plano de recuperacao", "laudo", "assembleia", "homologa", "quadro geral", "credores", "administrador judicial",
+          "constatacao previa", "convolacao", "falencia")
 _BAIXA = ("ato ordinatorio", "intimacao", "expedid", "remessa", "juntada", "conclus", "publicacao", "decurso", "certidao",
           "baixa", "autuacao", "recebimento", "ciencia", "vista", "remetid", "confirmad", "comunicacao", "cadastr", "lancamento", "decorrid")
 _DECISAO = ("decisao", "despacho")

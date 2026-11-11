@@ -189,3 +189,17 @@ tr:hover .copy,tr.sel .copy,.copy:focus,.copy.on{opacity:1}.copy:hover{backgroun
 #pasta-btn{margin-top:8px}
 #pasta-btn{align-self:center;width:auto}
 .mc-grupos{border:1px solid var(--line);border-radius:10px;padding:8px 12px;margin:6px 0;font-size:12.5px}.mc-g{display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--line);margin-top:6px;cursor:pointer}.mc-g .tag{margin-left:4px}
+
+/* Recuperação Judicial */
+dialog.xwide{width:min(1100px,96vw)}
+.rj-c{display:flex;flex-direction:column;gap:3px;padding:7px 10px;font-size:12.5px}.rj-tags{display:flex;gap:4px;flex-wrap:wrap}.rj-sit{padding:0!important;color:var(--muted)}
+.rj-sec{margin-bottom:18px}.rj-sec h3{font-size:14px;color:var(--blue);border-bottom:1px solid var(--line);padding-bottom:4px;margin:14px 0 8px}.rj-sec h4{font-size:12.5px;margin:12px 0 6px}
+.rj-f{display:grid;grid-template-columns:minmax(180px,26%) 1fr minmax(150px,22%);gap:4px 10px;align-items:start;padding:5px 0;border-top:1px solid var(--line)}
+.rj-f label{font-size:11.5px;font-weight:700;color:var(--ink);padding-top:7px}.rj-f.vazio label::after{content:" · sem informação";font-weight:400;color:var(--warn)}
+.rj-in,.rj-ta,.rj-f select,.rj-tab select{width:100%;box-sizing:border-box;font:inherit;font-size:12.5px;padding:6px 8px;border:1px solid var(--line);border-radius:7px;background:var(--card);color:var(--ink)}
+.rj-ta{resize:vertical;line-height:1.4}.rj-or{font-size:11.5px!important;color:var(--muted)}
+.rj-tab{margin:4px 0 8px;overflow:auto}.rj-tab table td{padding:3px 4px}.rj-tab .btn{margin-top:4px}
+.rj-qgc{border:1px solid var(--line);border-radius:9px;padding:8px;margin-bottom:8px}.rj-qh{display:grid;grid-template-columns:1.2fr .8fr 1fr 1.4fr auto;gap:6px;margin-bottom:4px}
+.rj-resumo .kpis{margin-bottom:8px}
+@media (max-width:800px){.rj-f{grid-template-columns:1fr}}
+.rj-ta{min-height:64px}

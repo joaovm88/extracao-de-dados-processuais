@@ -26,6 +26,7 @@ from .services import make_db, make_queue, make_store
 from .ingest import eventos as ev
 from .ingest import pje
 from . import APP_VERSION
+from .extract import check_citations
 from .worker import EXTRACT_PREFIX, READY_PREFIX, explain_llm_error, eventos_path, load_eventos, pages_path, run_worker
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -53,6 +54,11 @@ class ItensIn(BaseModel):
     acao: str  # "autorizar" | "descartar" | "sugerir" | "editar"
     indices: Optional[list[int]] = None  # None = todos os que estão como sugestão
     valores: Optional[dict] = None  # só para "editar" (um índice)
+
+
+class RjIn(BaseModel):
+    relatorio: dict
+    reviewed: bool = False
 
 
 class AssistenteIn(BaseModel):
@@ -287,6 +293,15 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         if not p or not p.get("result"):
             raise HTTPException(404, "Processo sem extração para revisar.")
         res = p["result"]
+        if res.get("sheet") == "rj":  # Recuperação Judicial: aqui só a marcação de revisado; o conteúdo se edita no relatório
+            if body.fields or body.observacoes is not None or body.bens is not None or body.fraudes is not None:
+                raise HTTPException(400, "Processo de Recuperação Judicial: edite o relatório (botão 📄 Abrir relatório).")
+            if bool(p.get("reviewed")) != bool(body.reviewed):
+                _baseline(cid, numero, p)
+                db.update_process(cid, numero, reviewed=int(body.reviewed))
+                db.add_history(cid, numero, "Edição do analista", "marcado como revisado" if body.reviewed else "voltou para “a revisar”",
+                               {"result": res, "reviewed": int(body.reviewed)})
+            return {"ok": True}
         sheet = SHEETS[res["sheet"]]
         _baseline(cid, numero, p)
         mudou: list[str] = []
@@ -334,6 +349,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(404, "Processo sem extração para receber observações.")
         if p.get("manual"):
             raise HTTPException(409, "Processo marcado como feito manualmente.")
+        if p["result"].get("sheet") == "rj":
+            raise HTTPException(409, "Processo de Recuperação Judicial: leve a informação para o relatório (campo ou observações do relatório).")
         linhas, modo = atos_da_resposta(body.pergunta, body.resposta, llm)
         if not linhas:
             return {"adicionadas": 0, "modo": modo, "observacoes": (p["result"].get("fields") or {}).get("observacoes") or ""}
@@ -354,6 +371,66 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                        {"result": res, "reviewed": 0})
         return {"adicionadas": len(novas), "modo": modo, "observacoes": res["fields"]["observacoes"],
                 "inexistentes": info.get("inexistentes") or [], "datas_do_sistema": bool(evs)}
+
+    # ---- Recuperação Judicial: relatório estruturado, editável, em Word e PDF
+    def _rj_proc(cid: str, numero: str) -> dict:
+        p = db.get_process(cid, numero)
+        if not p:
+            raise HTTPException(404, "Processo não encontrado.")
+        res = p.get("result") or {}
+        if res.get("sheet") != "rj" or not res.get("relatorio"):
+            raise HTTPException(404, "Este processo não tem relatório de Recuperação Judicial. Envie os PDFs escolhendo o tipo “Recuperação Judicial”.")
+        return p
+
+    @app.get("/api/cases/{cid}/processes/{numero}/rj")
+    def rj_get(cid: str, numero: str):
+        from . import rj
+
+        p = _rj_proc(cid, numero)
+        res = p["result"]
+        return {"numero": numero, "relatorio": res["relatorio"], "calculo": rj.calcular(res["relatorio"]), "reviewed": bool(p.get("reviewed")),
+                "citacoes_invalidas": res.get("citacoes_invalidas") or [], "sistema": res.get("sistema"),
+                "secoes": [{"chave": k, "titulo": t} for k, t in rj.SECOES],
+                "campos": [{"chave": k, "rotulo": r, "tipo": t, "secao": sec, "dica": d} for k, r, t, sec, d in rj.CAMPOS]}
+
+    @app.put("/api/cases/{cid}/processes/{numero}/rj")
+    def rj_put(cid: str, numero: str, body: RjIn):
+        from . import rj
+
+        p = _rj_proc(cid, numero)
+        res = p["result"]
+        _baseline(cid, numero, p)
+        res["relatorio"] = rj.normalizar_salvo(body.relatorio)
+        pages = []
+        for d in db.docs_for_process(cid, numero):
+            try:
+                pages += [{**x, "doc_id": d["id"]} for x in json.loads(pages_path(s, d["id"]).read_text(encoding="utf-8"))]
+            except Exception:  # noqa: BLE001
+                pass
+        res["citacoes_invalidas"] = check_citations(rj.textos(res["relatorio"]), pages, res.get("sistema")) if pages else res.get("citacoes_invalidas") or []
+        db.update_process(cid, numero, result=res, reviewed=int(body.reviewed))
+        db.add_history(cid, numero, "Edição do analista", "relatório de RJ editado" + (" e marcado como revisado" if body.reviewed else ""),
+                       {"result": res, "reviewed": int(body.reviewed)})
+        return {"ok": True, "calculo": rj.calcular(res["relatorio"]), "citacoes_invalidas": res["citacoes_invalidas"]}
+
+    def _rj_arquivo(cid: str, numero: str, formato: str) -> Response:
+        from . import rj
+
+        p = _rj_proc(cid, numero)
+        rel = p["result"]["relatorio"]
+        nome = f"Relatorio RJ - {numero}.{formato}"
+        if formato == "docx":
+            return Response(rj.gerar_docx(rel, numero), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+        return Response(rj.gerar_pdf(rel, numero), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{nome}"'})
+
+    @app.get("/api/cases/{cid}/processes/{numero}/rj.docx")
+    def rj_docx(cid: str, numero: str):
+        return _rj_arquivo(cid, numero, "docx")
+
+    @app.get("/api/cases/{cid}/processes/{numero}/rj.pdf")
+    def rj_pdf(cid: str, numero: str):
+        return _rj_arquivo(cid, numero, "pdf")
 
     @app.get("/api/cases/{cid}/processes/{numero}/history")
     def history(cid: str, numero: str):
