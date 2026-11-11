@@ -545,6 +545,11 @@ async function rjSalvar() {
   } catch (e) { toast(e.message, 'err'); return false; }
 }
 $('rj-save').onclick = rjSalvar;
+$('rj-clear').onclick = async () => {
+  if (!confirm('Apagar TODAS as informações deste relatório (inclusive suas edições)?\n\nOs PDFs continuam no sistema. Depois use “⟳ Atualizar com os PDFs” para gerar de novo.')) return;
+  try { await api(`${dl(rjd.numero)}/rj`, {method: 'DELETE'}); rjDirty = false; toast('Relatório limpo. Use “Atualizar com os PDFs” para gerar de novo.', 'ok'); $('dlg-rj').close(); refresh(true); }
+  catch (e) { toast(e.message, 'err'); }
+};
 ['rj-word', 'rj-pdf'].forEach(id => $(id).onclick = async e => { e.preventDefault(); if (rjDirty && !(await rjSalvar())) return; location.href = `${dl(rjd.numero)}/rj.${id === 'rj-word' ? 'docx' : 'pdf'}`; });
 $('dlg-rj').addEventListener('cancel', e => { if (rjDirty && !confirm('Há alterações não salvas no relatório. Fechar mesmo assim?')) e.preventDefault(); });
 $('dlg-rj').querySelectorAll('button[value=x]').forEach(b => b.addEventListener('click', e => { if (rjDirty && !confirm('Há alterações não salvas no relatório. Fechar mesmo assim?')) e.preventDefault(); }));

@@ -423,6 +423,22 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                        {"result": res, "reviewed": int(body.reviewed)})
         return {"ok": True, "calculo": rj.calcular(res["relatorio"]), "citacoes_invalidas": res["citacoes_invalidas"]}
 
+    @app.delete("/api/cases/{cid}/processes/{numero}/rj")
+    def rj_limpar(cid: str, numero: str):
+        """Zera o relatório de RJ (campos, tabelas, edições e controle de documentos lidos). Os PDFs continuam no sistema:
+        depois é só 'Atualizar com os PDFs' para gerar tudo de novo, ou excluir/enviar outros PDFs antes."""
+        from . import rj
+
+        p = _rj_proc(cid, numero)
+        res = p["result"]
+        _baseline(cid, numero, p)
+        res["relatorio"] = rj.normalizar({})
+        for k in ("rj_docs", "rj_merge", "citacoes_invalidas", "medidas"):
+            res.pop(k, None)
+        db.update_process(cid, numero, result=res, reviewed=0)
+        db.add_history(cid, numero, "Relatório de RJ limpo", "informações do relatório apagadas para recomeçar", {"result": res, "reviewed": 0})
+        return {"ok": True}
+
     def _rj_arquivo(cid: str, numero: str, formato: str) -> Response:
         from . import rj
 

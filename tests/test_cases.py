@@ -1394,6 +1394,11 @@ def test_rj_end_to_end_report_edit_downloads_and_stays_out_of_the_spreadsheet(en
     assert not any(p.style.name.lower().startswith("list") for p in D.paragraphs)  # nenhum parágrafo de lista
     pdf = pymupdf.open(stream=c.get(f"{base}/rj.pdf").content)
     assert "COMO O DESÁGIO PONDERADO FOI CALCULADO" in "".join(p.get_text() for p in pdf) and "RESUMO EXECUTIVO" in pdf[0].get_text()
+    # limpar relatório: zera tudo, mantém os PDFs e o relatório segue abrindo (vazio)
+    assert c.delete(f"{base}/rj").status_code == 200
+    vazio = c.get(f"{base}/rj").json()
+    assert not vazio["relatorio"]["empresas"] and not vazio["relatorio"]["classes"] and all(not x["valor"] for x in vazio["relatorio"]["campos"].values())
+    assert c.get(f"/api/cases/{cid}/documents").json()  # PDFs continuam
     # fora da planilha de execuções e sem editar campos de planilha
     wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
     assert all(numero not in [x.value for row in ws.iter_rows() for x in row] for ws in wb.worksheets)

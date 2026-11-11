@@ -181,3 +181,5 @@ Na janela **📎 PDFs**: caixas de seleção por arquivo, *Selecionar os com err
 - **Relatório mais limpo**: campos sem informação deixam de repetir "Não consta" e são reunidos numa única linha ao fim de cada seção.
 - **Cálculo do deságio**: o relatório traz a explicação da fórmula (Σ valor × % ÷ Σ valores) e a tabela de memória por classe.
 - Coluna **Processo digitalizado** aceita **Não** (processo físico).
+
+- **Limpar relatório**: no editor do relatório de RJ, o botão "🗑 Limpar relatório" apaga todas as informações (campos, tabelas, edições e controle de documentos lidos) mantendo os PDFs; depois use "⟳ Atualizar com os PDFs" para gerar tudo de novo.
