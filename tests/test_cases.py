@@ -1346,7 +1346,7 @@ def test_rj_classification_and_report_math_and_no_bullets():
     assert "PAGAMENTO DOS CRÉDITOS TRABALHISTAS (CLASSE I)" in calc["nao_consta"]  # campo não preenchido pela IA
     texto = rj.texto_plano(rel, "5001471-26.2023.8.13.0388")
     assert "Apresentado o relatório de constatação prévia" in texto and texto.index("19/06/2023") < texto.index("19/10/2023")  # cronologia em ordem de data
-    assert "Não consta nos documentos analisados." in texto and "CÁLCULO DO DESÁGIO PONDERADO" in texto and "68,96%" in texto
+    assert "Não consta nos documentos analisados: " in texto and "COMO O DESÁGIO PONDERADO FOI CALCULADO" in texto and "Total / média ponderada" in texto and "68,96%" in texto
     assert not any(ch in texto for ch in "•●▪◦") and "\n- " not in texto  # sem marcadores
     # visual law moderado: resumo executivo, linha do tempo e gráfico por classe; origens separadas do texto
     tipos = [b[0] for b in rj.blocos(rel, "5001471-26.2023.8.13.0388")]
@@ -1393,7 +1393,7 @@ def test_rj_end_to_end_report_edit_downloads_and_stays_out_of_the_spreadsheet(en
     assert "Luza Indústria e Comércio de Alimentos S.A" in corpo
     assert not any(p.style.name.lower().startswith("list") for p in D.paragraphs)  # nenhum parágrafo de lista
     pdf = pymupdf.open(stream=c.get(f"{base}/rj.pdf").content)
-    assert "CÁLCULO DO DESÁGIO PONDERADO" in "".join(p.get_text() for p in pdf) and "RESUMO EXECUTIVO" in pdf[0].get_text()
+    assert "COMO O DESÁGIO PONDERADO FOI CALCULADO" in "".join(p.get_text() for p in pdf) and "RESUMO EXECUTIVO" in pdf[0].get_text()
     # fora da planilha de execuções e sem editar campos de planilha
     wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
     assert all(numero not in [x.value for row in ws.iter_rows() for x in row] for ws in wb.worksheets)
@@ -1495,4 +1495,79 @@ def test_rj_new_pdfs_complement_the_report_without_erasing_or_overriding_edits(e
         if p["stale"] == 0 and p["result"]["relatorio"]["campos"]["vara"]["valor"] == "Só a vara":
             break
         time.sleep(0.1)
-    assert c.get(f"{base}/rj").json()["relatorio"]["campos"]["numero_rj"]["valor"] is None and not c.get(f"{base}/rj").json()["complemento"]
+    assert c.get(f"{base}/rj").json()["relatorio"]["campos"]["numero_rj"]["valor"] is None and c.get(f"{base}/rj").json()["complemento"]["complemento"] is False
+
+
+def test_digitalizado_can_be_set_to_no_for_physical_processes_and_goes_to_the_sheet(env):
+    c, _, tmp = env
+    cid, _ = _caso_com_pdf(c, tmp, "Dig")
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    sheet = lambda: {l["numero"]: l for l in c.get(f"/api/cases/{cid}/sheet").json()["linhas"]}
+    assert sheet()[NUM]["valores"]["digitalizado"] == "SIM" and sheet()["0000001-00.2020.4.01.0000"]["valores"]["digitalizado"] == "NÃO"  # sem PDF: NÃO
+    assert c.put(f"/api/cases/{cid}/processes/{NUM}/digitalizado", json={"valor": "não"}).json()["digitalizado"] == "NÃO"
+    assert sheet()[NUM]["valores"]["digitalizado"] == "NÃO"  # escolha do analista (processo físico)
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    achados = []
+    for ws in wb.worksheets:
+        linhas = [[x.value for x in row] for row in ws.iter_rows()]
+        cab = next((i for i, h in enumerate(linhas[0] if linhas else []) if str(h).upper().startswith("PROCESSO DIGITALIZADO")), None)
+        achados += [l[cab] for l in linhas[1:] if cab is not None and NUM in l]
+    assert achados == ["NÃO"]
+    assert c.put(f"/api/cases/{cid}/processes/{NUM}/digitalizado", json={"valor": None}).json()["digitalizado"] is None and sheet()[NUM]["valores"]["digitalizado"] == "SIM"
+    assert c.put(f"/api/cases/{cid}/processes/{NUM}/digitalizado", json={"valor": "talvez"}).status_code == 400
+
+
+def test_rj_anchoring_fixes_invented_ids_and_flags_what_is_not_in_the_documents():
+    from app import rj
+    pages = [{"page": 1, "label": "ID 9819031806, pg. 1", "text": "RECUPERAÇÃO JUDICIAL nº 5001471-26.2023.8.13.0388. Pedido ajuizado em 26/05/2023 pela Luza Indústria e Comércio de Alimentos S.A, CNPJ 22.135.959/0006-81."},
+             {"page": 2, "label": "ID 9819031806, pg. 2", "text": "Os créditos trabalhistas somam R$ 2.494.814,24 e os quirografários R$ 141.975.732,16. O deságio proposto é de 85% para a Classe III."}]
+    rel = rj.normalizar({
+        "data_ajuizamento": {"valor": "26/05/2023", "origem": "ID 1111111111, pg. 9"},          # origem inventada, dado existe na pg. 1
+        "numero_rj": {"valor": "5001471-26.2023.8.13.0388", "origem": "ID 9819031806, pg. 1"},  # origem correta
+        "data_concessao": {"valor": "09/06/2025", "origem": "ID 9819031806, pg. 2"},           # data que NÃO está nos documentos
+        "aprovado_agc": {"valor": "SIM", "origem": "ID 0000000000, pg. 1"},                    # SIM/NÃO com origem inexistente
+        "situacao_atual": {"valor": "Os créditos quirografários somam R$ 141.975.732,16 (ID 9819031806, pg. 2) e foram homologados (ID 7777777777, pg. 3).", "origem": None},
+        "classes": [{"classe": "Classe III", "valor_sujeito": "R$ 141.975.732,16", "desagio_percentual": 85, "origem": "ID 5555, pg. 2"}],
+        "empresas": [{"nome": "Luza Indústria e Comércio de Alimentos S.A", "cnpj": "22.135.959/0006-81"}, {"nome": "Empresa Fantasma", "cnpj": "99.999.999/0001-99"}]})
+    info = rj.ancorar(rel, pages)
+    c = rel["campos"]
+    assert c["data_ajuizamento"]["origem"] == "ID 9819031806, pg. 1" and c["data_ajuizamento"]["verificado"] is True  # trocada pela página que contém o dado
+    assert c["numero_rj"]["origem"] == "ID 9819031806, pg. 1" and c["numero_rj"]["verificado"] is True
+    assert c["data_concessao"]["verificado"] is False and c["data_concessao"]["origem"] == "ID 9819031806, pg. 2"  # não localizado: marcado
+    assert c["aprovado_agc"]["origem"] is None and c["aprovado_agc"]["verificado"] is None  # origem inexistente some
+    assert "(ID 9819031806, pg. 2)" in c["situacao_atual"]["valor"] and "7777777777" not in c["situacao_atual"]["valor"]  # citação inventada sai do texto
+    assert rel["classes"][0]["origem"] == "ID 9819031806, pg. 2" and rel["classes"][0]["verificado"] is True
+    assert [e["verificado"] for e in rel["empresas"]] == [True, False]
+    assert info["nao_localizados"] >= 2 and info["corrigidos"] >= 2
+
+
+def test_rj_documents_are_sent_one_at_a_time_with_a_hint_and_only_new_ones_on_update(env):
+    c, llm, tmp = env
+    llm.payload = {"numero_rj": {"valor": "5001471-26.2023.8.13.0388", "origem": "VOL 001, pg. 1"}}
+    cid = c.post("/api/cases", json={"nome": "RJ docs"}).json()["id"]
+    numero = "5001471-26.2023.8.13.0388"
+    ids = []
+    for nome in ("Plano de Recuperacao Judicial", "Laudo de Avaliacao de Bens"):
+        make_pdf(tmp / "x.pdf")
+        r = c.post("/api/documents", files={"file": (f"{numero}_{nome.replace(' ', '_')}.pdf", (tmp / "x.pdf").read_bytes() + b"\n%" + nome.encode(), "application/pdf")}, data={"case_id": cid, "tipo": "recuperacao_judicial"})  # conteúdo distinto (sem deduplicar)
+        assert r.status_code == 202, r.text
+        ids.append(r.json()["id"])
+    for i in ids:
+        for _ in range(100):
+            if c.get(f"/api/documents/{i}").json()["status"] == "done":
+                break
+            time.sleep(0.1)
+    base = f"/api/cases/{cid}/processes/{numero}"
+    for _ in range(150):
+        p = c.get(base).json()
+        if p["stale"] == 0 and p["result"] and p["result"].get("rj_docs") and len(p["result"]["rj_docs"]) == 2:
+            break
+        time.sleep(0.1)
+    chamadas = [x for x in llm.calls if "schema" in x]
+    avisos = [x["user"] for x in chamadas if "ESCOPO: este é UM documento" in x["user"]]
+    assert len(avisos) >= 2 and any("plano de recuperação judicial" in a for a in avisos) and any("laudo de avaliação de bens" in a for a in avisos)
+    assert p["result"]["rj_merge"]["documentos"] >= 1 and p["result"]["rj_merge"]["chamadas"] >= 1
+    n = len(llm.calls)
+    c.post(f"{base}/reextract")  # nada novo desde a última vez: não chama a IA
+    time.sleep(0.8)
+    assert len(llm.calls) == n and c.get(f"{base}/rj").json()["complemento"].get("sem_novos") is True

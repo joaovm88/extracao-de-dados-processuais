@@ -78,6 +78,10 @@ def build(processes: list[dict], docs: list[dict], template_bytes: Optional[byte
         else:
             campos = res.get("fields") or {}
             valores.update(normalize_fields(SHEETS[res["sheet"]], campos) if res.get("sheet") in SHEETS else campos)
+        if p.get("digitalizado"):  # escolha do analista (NÃO = processo físico) vale mais que o automático
+            valores["digitalizado"] = p["digitalizado"]
+        elif not res and not by_num.get(p["numero"]):
+            valores["digitalizado"] = "NÃO"  # sem PDF: o processo não foi digitalizado
         aba = res.get("sheet") or ("rj" if any(d.get("tipo") == "recuperacao_judicial" for d in by_num.get(p["numero"], []))
                                    else classify(m.get("classe") or p.get("classe") or "")[0])
         linhas.append({

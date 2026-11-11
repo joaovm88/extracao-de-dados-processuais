@@ -45,6 +45,10 @@ class TextIn(BaseModel):
     numero: Optional[str] = None
 
 
+class DigitalizadoIn(BaseModel):
+    valor: Optional[str] = None  # "SIM" | "NÃO" | None (volta ao automático)
+
+
 class HiddenIn(BaseModel):
     oculto: bool
 
@@ -514,6 +518,17 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             db.add_history(cid, numero, f"{nome}", resumo, {"result": res, "reviewed": int(p.get("reviewed") or 0)})
         return {"ok": True, "alterados": len(idx)}
 
+    @app.put("/api/cases/{cid}/processes/{numero}/digitalizado")
+    def set_digitalizado(cid: str, numero: str, body: DigitalizadoIn):
+        """Coluna 'Processo digitalizado': o analista marca NÃO quando o processo é físico (sem autos digitais)."""
+        if not db.get_process(cid, numero):
+            raise HTTPException(404, "Processo não encontrado.")
+        v = (body.valor or "").strip().upper().replace("NAO", "NÃO")
+        if v not in ("", "SIM", "NÃO"):
+            raise HTTPException(400, "Use SIM ou NÃO.")
+        db.update_process(cid, numero, digitalizado=v or None)
+        return {"ok": True, "digitalizado": v or None}
+
     @app.put("/api/cases/{cid}/processes/{numero}/hidden")
     def set_hidden(cid: str, numero: str, body: HiddenIn):
         """Oculta (ou reexibe) um processo: ele sai da tabela e da planilha exportada, sem apagar nada."""
@@ -695,9 +710,13 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         digest = sha.hexdigest()
         try:
             for old in db.list(case_id):  # mesmo arquivo (conteúdo) ou mesmo trecho reenviado: substitui, não duplica
-                same_part = (num and old["numero_processo"] == num and old["volume"] == vol
+                # 'mesmo trecho' só vale quando o nome traz volume, parte ou faixa de páginas. Documentos diferentes do mesmo
+                # processo SEM esses marcadores (ex.: 'Inicial', 'Plano', 'Laudo' de uma RJ) são todos mantidos.
+                marcado = vol is not None or info["parte"] is not None or bool(info["pagina_inicial"])
+                same_part = (marcado and num and old["numero_processo"] == num and old["volume"] == vol
                              and old["page_start"] == ini and old["parte"] == info["parte"])
-                if old.get("sha256") == digest or same_part:
+                mesmo_arquivo = bool(num) and old["numero_processo"] == num and old["filename"].lower() == Path(file.filename).name.lower()
+                if old.get("sha256") == digest or same_part or mesmo_arquivo:
                     _remove_doc(old)
             db.create(doc_id, Path(file.filename).name, str(dest), case_id,
                       numero_processo=num, volume=vol, evento=info["evento"], parte=info["parte"], tipo=tipo,

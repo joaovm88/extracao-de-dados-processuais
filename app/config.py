@@ -50,6 +50,8 @@ class Settings:
         # Esforço de raciocínio do Claude (modelos 5.x): low | medium | high | xhigh | max. Menos = mais rápido e barato.
         self.llm_effort = env("LLM_EFFORT", "low")
         # Texto máximo enviado ao LLM por processo (≈ 4 caracteres por token). Reduza no nível gratuito do Gemini.
+        # Recuperação Judicial: tamanho máximo de cada bloco enviado à IA (um documento por vez; documento maior vira vários blocos)
+        self.rj_chunk_chars = int(env("RJ_CHUNK_CHARS", "150000"))
         self.context_budget_chars = int(env("CONTEXT_BUDGET_CHARS", "400000"))
         self.ocr_lang = env("OCR_LANG", "por")
         self.ocr_dpi = int(env("OCR_DPI", "200"))

@@ -170,3 +170,14 @@ Na janela **📎 PDFs**: caixas de seleção por arquivo, *Selecionar os com err
 
 - **Complementar, não refazer:** *⟳ Atualizar com os PDFs* (painel do processo de RJ) lê os PDFs de novo **e completa o relatório existente**: a IA recebe o relatório atual junto com os documentos; o código garante que nada que já constava some, que o vazio é preenchido, que o que você editou na tela fica protegido (etiqueta *protegido*) e que as tabelas só ganham linhas (união por CNPJ, classe, bem, quadro e data). A janela do relatório mostra o que o último complemento fez. *Refazer do zero* descarta tudo (com confirmação).
 - **Visual do relatório (Word e PDF):** faixa de título, *resumo executivo* no topo, *pontos de atenção* (somas que não fecham, plano aprovado e não homologado, créditos da União etc.), linha do tempo das datas-chave, seções numeradas, fichas de rótulo e valor, tabelas com cabeçalho e linhas alternadas, cartões com os números principais, gráfico de barras do passivo por classe, cronologia em tabela de datas e origens em cinza (para não poluir a leitura). Paleta sóbria (azul-marinho e um azul de destaque; âmbar só nos pontos de atenção) e texto corrido, sem marcadores.
+
+## RJ: documentos separados, origens verificadas e relatório mais limpo
+
+- **Envie os documentos separados** (Inicial, Plano, Laudo, QGC, decisões…) com nomes descritivos. Cada documento é lido sozinho
+  (com uma dica do tipo, pelo nome), e as origens citadas (Evento/ID/página) são **conferidas pelo código** contra o texto das páginas;
+  o que não for localizado fica marcado como "a confirmar" no relatório.
+- Documentos diferentes do **mesmo processo** agora são todos mantidos (antes, um novo PDF sem volume/parte substituía o anterior).
+  A substituição só ocorre para o mesmo conteúdo, o mesmo nome de arquivo ou o mesmo trecho (volume/parte/páginas) reenviado.
+- **Relatório mais limpo**: campos sem informação deixam de repetir "Não consta" e são reunidos numa única linha ao fim de cada seção.
+- **Cálculo do deságio**: o relatório traz a explicação da fórmula (Σ valor × % ÷ Σ valores) e a tabela de memória por classe.
+- Coluna **Processo digitalizado** aceita **Não** (processo físico).

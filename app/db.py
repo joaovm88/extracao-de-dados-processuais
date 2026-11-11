@@ -16,7 +16,8 @@ _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEG
               "ext_started_at": "REAL", "ext_finished_at": "REAL", "ext_status": "TEXT",
               # processo feito à mão pelo analista: a IA não mexe nele e a planilha registra isso
               "manual": "INTEGER DEFAULT 0", "manual_note": "TEXT", "manual_at": "REAL",
-              "hidden": "INTEGER DEFAULT 0"}  # oculto: sai da tabela e da planilha exportada, sem apagar nada
+              "hidden": "INTEGER DEFAULT 0",
+              "digitalizado": "TEXT"}  # escolha do analista para a coluna "Processo digitalizado" (SIM/NÃO; NÃO = processo físico)  # oculto: sai da tabela e da planilha exportada, sem apagar nada
 
 
 # Colunas de documents adicionadas ao longo das versões: bancos antigos (volume do Docker) são migrados na abertura.

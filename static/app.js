@@ -227,6 +227,7 @@ function cell(l, c, ed, waiting) {
   if (c.fonte === 'rj') return rjCell(l, c, ['extraindo', 'aguardando'].includes(l.estado));
   const v = l.valores[c.key] ?? '', tip = l.citacoes[c.key] ? ` title="Origem: ${esc(l.citacoes[c.key])}"` : '';
   const W = (inner, cls = '') => `<td${cls ? ` class="${cls}"` : ''}${tip}><div class="cc">${inner}</div></td>`;
+  if (c.key === 'digitalizado') return W(`<select data-dig title="NÃO = processo físico (sem autos digitais)"><option value=""${v ? '' : ' selected'}></option>${['SIM', 'NÃO'].map(o => `<option ${o === v ? 'selected' : ''}>${o}</option>`).join('')}</select>`);  // o analista escolhe (NÃO quando o processo é físico)
   if (c.fonte !== 'ai') return W(esc(v), 'c ro');  // capa (Mcfly) e campos do sistema: somente leitura
   if (l.estado === 'manual') return W(c.key === 'observacoes' && v ? `<div class="manual-nota">${esc(v)}</div>` : '<div class="wait">—</div>');
   if (!ed) return W(waiting ? '<div class="shim"></div>' : '<div class="wait">—</div>');
@@ -288,6 +289,7 @@ async function save(numero, key, value, td) {
 }
 $('grid').addEventListener('change', e => {
   const tr = e.target.closest('tr'); if (!tr) return;
+  if (e.target.matches('[data-dig]')) { api(`/api/cases/${caseId}/processes/${enc(tr.dataset.n)}/digitalizado`, json('PUT', {valor: e.target.value || null})).then(() => { row(tr.dataset.n).valores.digitalizado = e.target.value; dataKey = JSON.stringify(data); toast('Salvo', 'ok'); }).catch(err => { toast(err.message, 'err'); refresh(true); }); return; }
   if (e.target.matches('[data-item-k]')) { const [lista, numero, i] = tr.dataset.item.split('|'); return itemAcao(lista, numero, [+i], 'editar', {[e.target.dataset.itemK]: e.target.value || null}); }
   if (e.target.matches('[data-rev]')) return setReviewed(tr.dataset.n, e.target.checked);
   if (e.target.matches('[data-k]')) save(tr.dataset.n, e.target.dataset.k, e.target.value, e.target.closest('td'));

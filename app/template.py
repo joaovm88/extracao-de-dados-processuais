@@ -150,9 +150,13 @@ def _values(kind: str, proc: dict) -> dict:
         vals["situacao_analise"] = situacao_analise(proc)
         if proc.get("manual"):  # feito à mão: só a marcação vai para a planilha (nenhum valor da IA)
             vals["observacoes"] = manual_text(proc)
+            if proc.get("digitalizado"):
+                vals["digitalizado"] = proc["digitalizado"]
             return vals
         fields = normalize_fields(SHEETS[kind], res["fields"]) if res else {"digitalizado": "NÃO"}
         vals.update({k: v for k, v in fields.items() if v not in (None, "")})
+        if proc.get("digitalizado"):  # escolha do analista (NÃO = processo físico)
+            vals["digitalizado"] = proc["digitalizado"]
     return vals
 
 

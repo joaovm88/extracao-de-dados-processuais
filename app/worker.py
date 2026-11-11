@@ -191,6 +191,59 @@ def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: Searc
             extract_process(case_id, proc["numero"], settings, db, store, llm_client)
 
 
+def _extrair_rj(case_id, numero, docs, pages, proc, prompt, sistema, result, llm, settings, db, zero, classe, sheet_key) -> None:
+    """RJ: cada documento (ou bloco dele) vai à IA sozinho, com o que ele costuma conter; o código confere as origens contra o texto das
+    páginas e junta os resultados. Com relatório já existente, só os documentos NOVOS são lidos e o relatório é complementado."""
+    from . import rj
+
+    ant = proc.get("result") or {}
+    antigo = None if zero else ant.get("relatorio")
+    ja = set(ant.get("rj_docs") or []) if antigo else set()
+    novos = [d for d in docs if d["id"] not in ja]
+    por_doc = {d["id"]: [p for p in pages if p["doc_id"] == d["id"]] for d in docs}
+    novos.sort(key=lambda d: (rj.data_documento(por_doc[d["id"]]), d.get("created_at") or 0))
+    agora = time.time()
+    if antigo and not novos:  # nada novo desde a última vez: não gasta IA
+        ant["rj_merge"] = {**(ant.get("rj_merge") or {}), "sem_novos": True, "em": agora, "complemento": True}
+        db.finish_extraction(case_id, numero, result=ant, ext_finished_at=agora, ext_status="ok", error=None)
+        return
+    rel, acum = antigo, {"preenchidos": 0, "atualizados": 0, "linhas_novas": 0, "mantidos_por_edicao": 0}
+    anc = {"confirmados": 0, "corrigidos": 0, "nao_localizados": 0}
+    t_ia, chamadas, enviadas, car_env, tok_in, tok_out = time.perf_counter(), 0, 0, 0, 0, 0
+    for d in novos:
+        for pedaco in rj.pedacos(por_doc[d["id"]], settings.rj_chunk_chars):
+            ctx = "\n\n".join(f"=== [{p['label']}] ===\n{p['text']}" for p in pedaco)
+            out = ex.extract_rj(prompt, ctx, llm, sistema, False, None, rj.dica_documento(d["filename"], pedaco[0]["text"]))
+            for k, v in rj.ancorar(out, pedaco).items():
+                anc[k] += v
+            u = getattr(llm, "last_usage", None) or {}
+            tok_in += u.get("entrada") or 0
+            tok_out += (u.get("saida") or 0) + (u.get("raciocinio") or 0)
+            if rel is None:
+                rel = out
+            else:
+                rel, mi = rj.mesclar(rel, out)
+                for k in acum:
+                    acum[k] += mi[k]
+            chamadas += 1
+            enviadas += len(pedaco)
+            car_env += len(ctx)
+    rel.setdefault("_editados", [])
+    result.update(fields={}, relatorio=rel, modo="llm", provedor=llm.name, rj_docs=sorted(ja | {d["id"] for d in novos}),
+                  rj_merge={**acum, **anc, "em": agora, "documentos": len(novos), "chamadas": chamadas, "complemento": bool(antigo)})
+    result["medidas"] = {"contexto": {"modo": "rj_por_documento", "documentos": len(novos), "chamadas": chamadas, "paginas_total": len(pages), "paginas_enviadas": enviadas,
+                                      "paginas_omitidas": max(len(pages) - enviadas, 0), "caracteres_total": sum(len(p["text"]) for p in pages),
+                                      "caracteres_enviados": car_env, "orcamento": settings.rj_chunk_chars, "cortado": False},
+                         "tokens": {"entrada": tok_in, "saida": tok_out, "raciocinio": None}, "extracao_s": round(time.perf_counter() - t_ia, 1),
+                         "chamada": getattr(llm, "last_call", None)}
+    result["citacoes_invalidas"] = ex.check_citations(rj.textos(rel), pages, sistema)
+    resumo = (f"{len(novos)} documento(s) em {chamadas} chamada(s); origens: {anc['confirmados']} confirmadas, {anc['corrigidos']} corrigidas, "
+              f"{anc['nao_localizados']} não localizadas" + (f"; {acum['preenchidos']} campo(s) preenchido(s), {acum['atualizados']} atualizado(s), {acum['linhas_novas']} linha(s) nova(s)" if antigo else ""))
+    db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema, reviewed=0, error=None,
+                         ext_finished_at=time.time(), ext_status="ok")
+    db.add_history(case_id, numero, "Complemento pela IA" if antigo else "Extração pela IA", "relatório de RJ · " + resumo, {"result": result, "reviewed": 0})
+
+
 def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataDB, store: SearchStore,
                     llm_client=None, zero: bool = False) -> None:
     if (db.get_process(case_id, numero) or {}).get("manual"):
@@ -218,6 +271,9 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
                   "citacoes": {}, "revisar": [], "modo": "sem_llm", "sistema": sistema, "citacoes_invalidas": [],
                   "documentos": [d["filename"] for d in docs], "paginas": len(pages)}
         llm = llm_client or get_llm(settings)
+        if llm is not None and sheet is None:  # Recuperação Judicial: um documento por vez, com as origens conferidas pelo código
+            _extrair_rj(case_id, numero, docs, pages, proc, prompt, sistema, result, llm, settings, db, zero, classe, sheet_key)
+            return
         if llm is not None:
             evs = load_eventos(settings, docs)
             usar_eventos = sistema in ("eproc", "pje") and sum(1 for e in evs if e["data"]) >= 3  # digitalizados sem sistema: contexto por páginas
@@ -228,26 +284,10 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             else:
                 context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
             t_ia = time.perf_counter()
-            antigo = None if zero or sheet is not None else ((proc.get("result") or {}).get("relatorio"))  # RJ: complementa o que já existe
-            out = (ex.extract_rj(prompt, context, llm, sistema, com_indice=usar_eventos, atual=antigo) if sheet is None
-                   else ex.extract_with_llm(sheet, prompt, context, llm, sistema, com_indice=usar_eventos))
+            out = ex.extract_with_llm(sheet, prompt, context, llm, sistema, com_indice=usar_eventos)
             result["medidas"] = {"contexto": info, "tokens": getattr(llm, "last_usage", None),
                                  "extracao_s": round(time.perf_counter() - t_ia, 1),
                                  "chamada": getattr(llm, "last_call", None)}
-            if sheet is None:  # Recuperação Judicial: o relatório fica em result["relatorio"]; as citações são conferidas com o PDF
-                from . import rj
-                resumo_hist = f"relatório de RJ · {len(pages)} página(s) lidas"
-                if antigo:  # complementa: nada que já constava some; o que o analista editou fica; o vazio é preenchido
-                    out, mi = rj.mesclar(antigo, out)
-                    result["rj_merge"] = {**mi, "em": time.time()}
-                    resumo_hist = (f"relatório de RJ complementado: {mi['preenchidos']} campo(s) preenchido(s), {mi['atualizados']} atualizado(s), "
-                                   f"{mi['linhas_novas']} linha(s) nova(s), {mi['mantidos_por_edicao']} mantido(s) por edição sua")
-                result.update(fields={}, relatorio=out, modo="llm", provedor=llm.name)
-                result["citacoes_invalidas"] = ex.check_citations(rj.textos(out), pages, sistema)
-                db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema,
-                                     reviewed=0, error=None, ext_finished_at=time.time(), ext_status="ok")
-                db.add_history(case_id, numero, "Extração pela IA" if not antigo else "Complemento pela IA", resumo_hist, {"result": result, "reviewed": 0})
-                return
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result["fields"]["observacoes"] = ex.format_cronologia(result["fields"].get("observacoes"))  # um ato por linha
             result.update(bens=out["bens"], fraudes=out["fraudes"], citacoes=out["citacoes"],

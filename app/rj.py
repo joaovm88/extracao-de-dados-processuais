@@ -121,18 +121,18 @@ def normalizar(raw: dict) -> dict:
         elif v and tipo == "simnao":
             u = v.upper().replace("Ã", "A")
             v = "SIM" if u in ("SIM", "S") else "NÃO" if u in ("NAO", "N") else None
-        rel["campos"][k] = {"valor": v, "origem": _s(c.get("origem")) if isinstance(c, dict) else None}
+        rel["campos"][k] = {"valor": v, "origem": _s(c.get("origem")) if isinstance(c, dict) else None, "verificado": c.get("verificado") if isinstance(c, dict) else None}
     rel["empresas"] = [{"nome": _s(e.get("nome")), "cnpj": _s(e.get("cnpj")), "em_recuperacao_judicial": (_s(e.get("em_recuperacao_judicial")) or "").upper() or None,
-                        "origem": _s(e.get("origem"))} for e in (raw or {}).get("empresas") or [] if isinstance(e, dict) and (e.get("nome") or e.get("cnpj"))]
+                        "origem": _s(e.get("origem")), "verificado": e.get("verificado")} for e in (raw or {}).get("empresas") or [] if isinstance(e, dict) and (e.get("nome") or e.get("cnpj"))]
     rel["classes"] = [{"classe": _s(c.get("classe")), "proposta": _s(c.get("proposta")), "valor_sujeito": fmt_moeda_br(_s(c.get("valor_sujeito"))),
-                       "desagio_percentual": _pct(c.get("desagio_percentual")), "origem": _s(c.get("origem"))}
+                       "desagio_percentual": _pct(c.get("desagio_percentual")), "origem": _s(c.get("origem")), "verificado": c.get("verificado")}
                       for c in (raw or {}).get("classes") or [] if isinstance(c, dict) and c.get("classe")]
     rel["bens"] = [{"tipo": _s(b.get("tipo")), "valor_mercado": fmt_moeda_br(_s(b.get("valor_mercado"))), "valor_liquidacao": fmt_moeda_br(_s(b.get("valor_liquidacao"))),
-                    "localidade": _s(b.get("localidade")), "origem": _s(b.get("origem"))} for b in (raw or {}).get("bens") or [] if isinstance(b, dict) and b.get("tipo")]
-    rel["qgc"] = [{"fonte": _s(q.get("fonte")), "data": fmt_data_br(_s(q.get("data"))), "origem": _s(q.get("origem")), "total": fmt_moeda_br(_s(q.get("total"))),
+                    "localidade": _s(b.get("localidade")), "origem": _s(b.get("origem")), "verificado": b.get("verificado")} for b in (raw or {}).get("bens") or [] if isinstance(b, dict) and b.get("tipo")]
+    rel["qgc"] = [{"fonte": _s(q.get("fonte")), "data": fmt_data_br(_s(q.get("data"))), "origem": _s(q.get("origem")), "verificado": q.get("verificado"), "total": fmt_moeda_br(_s(q.get("total"))),
                    "classes": [{"classe": _s(c.get("classe")), "valor": fmt_moeda_br(_s(c.get("valor")))} for c in q.get("classes") or [] if isinstance(c, dict) and c.get("classe")]}
                   for q in (raw or {}).get("qgc") or [] if isinstance(q, dict)]
-    rel["observacoes"] = [{"data": fmt_data_br(_s(o.get("data"))), "texto": _s(o.get("texto")), "origem": _s(o.get("origem"))}
+    rel["observacoes"] = [{"data": fmt_data_br(_s(o.get("data"))), "texto": _s(o.get("texto")), "origem": _s(o.get("origem")), "verificado": o.get("verificado")}
                           for o in (raw or {}).get("observacoes") or [] if isinstance(o, dict) and o.get("texto")]
     return rel
 
@@ -203,10 +203,13 @@ def mesclar(antigo: dict, novo: dict) -> tuple[dict, dict]:
             out["campos"][k] = dict(n)
             info["preenchidos"] += 1
         elif nv != ov:
-            out["campos"][k] = dict(n)
-            info["atualizados"] += 1
+            if n.get("verificado") is False and o.get("verificado") is True:
+                out["campos"][k] = dict(o)  # o novo não foi localizado nos documentos; o antigo foi: fica o confirmado
+            else:
+                out["campos"][k] = dict(n)
+                info["atualizados"] += 1
         else:
-            out["campos"][k] = {"valor": ov, "origem": o.get("origem") or n.get("origem")}
+            out["campos"][k] = {**o, "origem": o.get("origem") or n.get("origem"), "verificado": o.get("verificado") if o.get("verificado") is not None else n.get("verificado")}
     for nome in ("empresas", "classes", "bens", "qgc", "observacoes"):
         out[nome] = _mescla_lista(nome, antigo.get(nome) or [], novo.get(nome) or [], f"tabela:{nome}" in ed, info)
     return out, info
@@ -235,11 +238,171 @@ def marcar_edicoes(antigo: dict, novo: dict) -> dict:
     for k in POR_CHAVE:
         if (novo["campos"].get(k) or {}) != ((antigo.get("campos") or {}).get(k) or {}) and (novo["campos"].get(k) or {}).get("valor"):
             ed.add(f"campo:{k}")
+            novo["campos"][k]["verificado"] = None  # texto do analista: não é a IA
     for nome in ("empresas", "classes", "bens", "qgc", "observacoes"):
         if (novo.get(nome) or []) != (antigo.get(nome) or []):
             ed.add(f"tabela:{nome}")
     novo["_editados"] = sorted(ed)
     return novo
+
+
+# ---------------- origens conferidas pelo código (contra a alucinação de ID e página) ----------------
+_TIPOS_DOC = [
+    ("constatacao", "relatório de constatação prévia", "situação das empresas, documentos apresentados, viabilidade"),
+    ("laudo.*(bens|avalia)|avaliacao", "laudo de avaliação de bens", "tipos de bens, valor de mercado e de liquidação forçada, localidades vistoriadas, imóveis"),
+    ("viabilidade|econ.mico", "laudo de viabilidade econômico-financeira", "situação financeira, projeções, lucro ou prejuízo, ativo e passivo"),
+    ("plano|prj|aditivo", "plano de recuperação judicial (PRJ) ou aditivo", "classes, proposta de pagamento por classe (deságio, parcelas, carência, atualização), credores apoiadores e colaborativos, FGTS, alienação de bens, reestruturações, QGC do plano"),
+    ("ata|assembleia|agc", "ata ou edital de assembleia geral de credores", "data e convocação, cenários de votação, aprovação do plano"),
+    ("homolog|deferimento|processamento|decisao|despacho|sentenca", "decisão judicial", "datas de deferimento do processamento e de homologação/concessão, administrador judicial nomeado, determinações, situação atual"),
+    ("edital", "edital (art. 7º, § 2º, da Lei 11.101/2005)", "data de publicação e prazos"),
+    ("quadro|qgc|relacao|credores", "quadro ou relação de credores", "valores por classe, totais, data e fonte do quadro"),
+    ("administrador|relatorio|aj", "relatório da administração judicial", "QGC da administração judicial, situação financeira, cumprimento do plano, pagamentos, fiscalização"),
+    ("uniao|fazenda|pgfn|tribut|certidao", "manifestação da União/Fazenda Nacional ou certidão", "créditos tributários, certidão do art. 57, transação, pedidos"),
+    ("inicial|pedido de recuperacao|recuperacao judicial", "petição inicial do pedido de recuperação judicial", "empresas e CNPJ, data de ajuizamento, causas da crise, grupo econômico, situação financeira"),
+]
+
+
+def dica_documento(nome_arquivo: str, inicio: str = "") -> str:
+    """Instrução que acompanha CADA documento enviado à IA: o que ele costuma conter e que só vale o que ele comprova."""
+    base = _nk(f"{nome_arquivo} {inicio[:400]}")
+    achado = next(((d, f) for pad, d, f in _TIPOS_DOC if re.search(pad, base)), None)
+    return (f"ESCOPO: este é UM documento do processo ('{nome_arquivo}')" + (f", que parece ser {achado[0]}. Em geral ele traz: {achado[1]}." if achado else ".")
+            + " Preencha SOMENTE o que ESTE documento comprova; deixe null o resto (outros documentos serão analisados em seguida e o sistema junta tudo). "
+              "NÃO responda 'NÃO' nem 'inexistente' só porque o documento não menciona o assunto. Cite a origem apenas com os rótulos entre colchetes deste documento.\n\n")
+
+
+def _norm_pagina(t: str) -> str:
+    return "".join((t or "").split()).replace(".", "").lower()
+
+
+def _salientes(texto: str) -> list[str]:
+    """Datas, valores, CNPJ/CPF, nº de processo e percentuais do texto, no formato de comparação (sem pontos nem espaços)."""
+    t = texto or ""
+    toks = re.findall(r"\d{2}/\d{2}/\d{4}", t) + re.findall(r"\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}", t) + re.findall(r"\d{7}-\d{2}\.\d{4}\.\d\.\d{2}\.\d{4}", t)
+    toks += [m.group(1) for m in re.finditer(r"R\$\s*([\d.]+(?:,\d{2})?)", t)]
+    return list(dict.fromkeys(_norm_pagina(x) for x in toks))
+
+
+def _palavras(texto: str) -> list[str]:
+    ws = [w for w in _nk(_ORIG.sub("", texto or "")).split() if len(w) >= 5]
+    return list(dict.fromkeys(ws))[:14]
+
+
+def _avalia(texto: str, pgs_norm: list[str]) -> tuple[int, float]:
+    """(índice da melhor página, qualidade 0..1): fração dos dados do texto (datas, valores…) ou das palavras raras que a página contém."""
+    toks = _salientes(texto)
+    alvo = toks or _palavras(texto)
+    if not alvo:
+        return -1, 0.0
+    melhor, q = -1, 0.0
+    for i, pg in enumerate(pgs_norm):
+        achou = sum(1 for a in alvo if a in pg)
+        if achou / len(alvo) > q:
+            melhor, q = i, achou / len(alvo)
+        if q == 1.0:
+            break
+    # sem dados fortes (só palavras), exige mais evidência e um mínimo de palavras
+    if not toks and len(alvo) < 3:
+        return -1, 0.0
+    return melhor, q
+
+
+def _rotulos_validos(pages: list[dict]) -> set:
+    return {re.sub(r"\s+", "", p["label"]).lower() for p in pages if p.get("label")}
+
+
+def _inline_validas(texto: Optional[str], validos: set, ids: set) -> Optional[str]:
+    """Tira de dentro do texto as citações '(ID 123, pg. 4)' que não existem nos documentos (alucinação)."""
+    if not texto:
+        return texto
+
+    def troca(m):
+        corpo = m.group(0)[1:-1]
+        partes = [re.sub(r"\s+", "", x).lower() for x in re.split(r";", corpo)]
+        ok = all(x in validos or re.sub(r",?pg\.?\d+(?:a\d+)?$", "", x) in ids for x in partes if x)
+        return m.group(0) if ok else ""
+    t = _ORIG.sub(troca, texto)
+    return re.sub(r"\s{2,}", " ", re.sub(r"\s+([.,;])", r"\1", t)).strip()
+
+
+def ancorar(rel: dict, pages: list[dict]) -> dict:
+    """Confere CADA informação do relatório com o texto das páginas lidas: a origem (Evento/ID e página) passa a ser a da página que
+    realmente contém os dados (datas, valores, CNPJ…); origem que a IA inventou é trocada; o que não se encontra nos documentos
+    fica marcado como não localizado. Devolve contadores."""
+    info = {"confirmados": 0, "corrigidos": 0, "nao_localizados": 0}
+    pgs = [_norm_pagina(p["text"]) for p in pages]
+    rot = [p.get("label") for p in pages]
+    validos = _rotulos_validos(pages)
+    ids = {re.sub(r"\s+", "", re.sub(r",?\s*pg\.?\s*\d+.*$", "", p["label"])).lower() for p in pages if p.get("label")}
+
+    por_rotulo = {re.sub(r"\s+", "", r).lower(): i for i, r in enumerate(rot) if r}
+
+    def confere(item: dict, texto: str, simples: bool = False):
+        """item: dict com 'origem' e 'verificado' (campo ou linha de tabela)."""
+        orig = item.get("origem")
+        oi = por_rotulo.get(re.sub(r"\s+", "", orig).lower()) if orig else None
+        if simples:  # SIM/NÃO e afins: sem dados para comparar; só vale a origem se ela existir
+            item["origem"] = orig if oi is not None else None
+            item["verificado"] = None
+            return
+        toks = _salientes(texto)
+        limiar = 0.99 if toks else 0.5
+        i, q = _avalia(texto, pgs)
+        if q >= limiar or (len(toks) >= 3 and q >= 0.67):
+            if oi is not None and _avalia(texto, [pgs[oi]])[1] >= min(limiar, q):
+                info["confirmados"] += 1  # a origem que a IA deu realmente contém os dados
+            else:
+                info["corrigidos" if orig else "confirmados"] += 1
+                item["origem"] = rot[i]
+            item["verificado"] = True
+        else:
+            item["origem"] = orig if oi is not None else None
+            item["verificado"] = False
+            info["nao_localizados"] += 1
+
+    for k, c in (rel.get("campos") or {}).items():
+        v = c.get("valor")
+        if not v:
+            continue
+        c["valor"] = _inline_validas(v, validos, ids)
+        confere(c, c["valor"], simples=POR_CHAVE[k][2] == "simnao")
+    for lista, campos_txt in (("empresas", ("cnpj", "nome")), ("classes", ("valor_sujeito", "classe")), ("bens", ("valor_mercado", "tipo")),
+                              ("observacoes", ("data", "texto"))):
+        for r in rel.get(lista) or []:
+            texto = " ".join(str(r.get(x) or "") for x in campos_txt)
+            if lista == "observacoes":
+                r["texto"] = _inline_validas(r.get("texto"), validos, ids)
+            if texto.strip():
+                confere(r, texto)
+    for q in rel.get("qgc") or []:
+        texto = " ".join([q.get("total") or "", q.get("data") or ""] + [cl.get("valor") or "" for cl in q.get("classes") or []])
+        if texto.strip():
+            confere(q, texto)
+    return info
+
+
+def pedacos(pages: list[dict], limite: int) -> list[list[dict]]:
+    """Páginas de UM documento em blocos de até `limite` caracteres (documento enorme = várias chamadas, nunca contexto cortado)."""
+    out, cur, n = [], [], 0
+    for p in pages:
+        t = len(p["text"])
+        if cur and n + t > limite:
+            out.append(cur)
+            cur, n = [], 0
+        cur.append(p)
+        n += t
+    if cur:
+        out.append(cur)
+    return out
+
+
+def data_documento(pages: list[dict]) -> str:
+    """Data de assinatura do documento (PJe) para pôr os documentos em ordem cronológica; sem data, vai para o fim."""
+    for p in pages[:8]:
+        m = re.search(r"Assinado eletronicamente por:[^\n]*?(\d{2})/(\d{2})/(\d{4})", p.get("text") or "")
+        if m:
+            return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+    return "9999"
 
 
 def _chave_data(d: Optional[str]) -> str:
@@ -249,6 +412,10 @@ def _chave_data(d: Optional[str]) -> str:
 
 def brl(x: float) -> str:
     return "R$ " + f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def brl_num(x: float) -> str:
+    return brl(x)
 
 
 def calcular(rel: dict) -> dict:
@@ -265,6 +432,9 @@ def calcular(rel: dict) -> dict:
         out["desagio"] = round(sum(v * d for _, v, d in validas) / total, 2)
         out["memoria"] = [f"{c['classe']}: {brl(v)} com deságio de {d:g}%, equivalente a {brl(v * d / 100)} de desconto" for c, v, d in validas]
         out["base"] = brl(total)
+        out["desconto_numero"] = sum(v * d / 100 for _, v, d in validas)
+        out["linhas_desagio"] = [[c["classe"], brl(v), f"{d:g}%".replace(".", ","), brl(v * d / 100)] for c, v, d in validas] + \
+                                [["Total / média ponderada", brl(total), f"{out['desagio']:g}%".replace(".", ","), brl(out["desconto_numero"])]]
         out["desconto_total"] = brl(sum(v * d / 100 for _, v, d in validas))
     bens = rel.get("bens") or []
     if bens:
@@ -388,25 +558,39 @@ def blocos(rel: dict, numero: str, hoje: Optional[date] = None) -> list[tuple]:
     if len(tl) >= 2:
         B.append(("timeline", [(d, r) for _, d, r in tl]))
 
+    faltantes: list[str] = []
+
     def ficha_rot(chaves_secao: str, pular=()):
         saida, grupo = [], []
         for k, rot, tipo, sec, _ in CAMPOS:
             if sec != chaves_secao or k in pular:
                 continue
-            valor, origem = (c.get(k) or {}).get("valor"), (c.get(k) or {}).get("origem")
+            campo = c.get(k) or {}
+            valor, origem = campo.get("valor"), campo.get("origem")
+            if not valor:  # visual limpo: o que não consta vai para uma única linha ao fim da seção
+                faltantes.append(rot)
+                continue
+            if origem and campo.get("verificado") is False:
+                origem = f"{origem}; a confirmar"
             if tipo == "paragrafo":
                 if grupo:
                     saida.append(("ficha", grupo))
                     grupo = []
-                saida.append(("rot", rot, valor or NC, origem if valor else None))
+                saida.append(("rot", rot, valor, origem))
             else:
-                grupo.append((rot, valor or NC, origem if valor else None))
+                grupo.append((rot, valor, origem))
         if grupo:
             saida.append(("ficha", grupo))
         return saida
 
+    def fecha_secao():
+        if faltantes:
+            B.append(("nota", "Não consta nos documentos analisados: " + _lista_em_prosa(list(faltantes)).rstrip(".") + "."))
+            faltantes.clear()
+
     n = 0
     for chave, titulo in SECOES:
+        fecha_secao()
         n += 1
         B.append(("secao", n, titulo))
         if chave == "identificacao":
@@ -462,15 +646,20 @@ def blocos(rel: dict, numero: str, hoje: Optional[date] = None) -> list[tuple]:
             ed = (c.get("edital") or {})
             B.append(("ficha", [("PUBLICAÇÃO DO EDITAL", ed.get("valor") or NC, ed.get("origem") if ed.get("valor") else None)]))
             if calc.get("desagio") is not None:
-                B.append(("rot", "CÁLCULO DO DESÁGIO PONDERADO", f"{str(calc['desagio']).replace('.', ',')}% sobre uma base de {calc['base']}, o que corresponde a um desconto total de "
-                                                                 f"{calc['desconto_total']}. " + "; ".join(calc["memoria"]) + ". O deságio de cada classe é ponderado pelo respectivo valor no quadro de credores.", None))
+                B.append(("rot", "COMO O DESÁGIO PONDERADO FOI CALCULADO",
+                          "O deságio de cada classe é o percentual de redução do crédito previsto no plano. Para chegar ao índice geral, cada percentual é multiplicado "
+                          "pelo valor da respectiva classe no quadro de credores (o que dá o desconto, em reais); soma-se o desconto de todas as classes e divide-se pela soma "
+                          f"dos valores sujeitos à recuperação. Resultado: {brl_num(calc['desconto_numero'])} de desconto sobre {calc['base']}, ou seja, "
+                          f"{str(calc['desagio']).replace('.', ',')}%. Classes sem valor ou sem percentual informado ficam fora da conta.", None))
+                B.append(("tabela", ["Classe de credores", "Valor sujeito", "Deságio", "Desconto"], calc["linhas_desagio"], [38, 22, 14, 26], "lrrr"))
             else:
-                B.append(("rot", "CÁLCULO DO DESÁGIO PONDERADO", "Não foi possível calcular: faltam o valor por classe ou o deságio de alguma classe.", None))
+                B.append(("rot", "COMO O DESÁGIO PONDERADO FOI CALCULADO", "Não foi possível calcular: faltam o valor por classe ou o deságio de alguma classe.", None))
         elif chave == "observacoes":
             obs = sorted(rel.get("observacoes") or [], key=lambda o: _chave_data(o.get("data")))
             B.append(("cronologia", [(o.get("data") or "s/d", (o["texto"] or "").rstrip(" ."), o.get("origem")) for o in obs]) if obs else ("rot", "CRONOLOGIA", NC, None))
         else:
             B += ficha_rot(chave)
+    fecha_secao()
     if calc["avisos"]:
         B.append(("nota", "Pontos a conferir: " + " ".join(calc["avisos"])))
     return B

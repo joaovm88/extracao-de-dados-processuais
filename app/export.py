@@ -63,6 +63,8 @@ def build_case_xlsx(case: dict, processes: list[dict]) -> bytes:
         if p.get("manual"):  # registrado na planilha: feito manualmente (nenhum valor da IA)
             fields = {"observacoes": manual_text(p)}
             res = None
+        if p.get("digitalizado"):  # escolha do analista (NÃO = processo físico)
+            fields["digitalizado"] = p["digitalizado"]
         row = [p["numero"] if f.key == "numero" else (m.get(f.key) if f.source == "mcfly" else fields.get(f.key))
                for f in sheet.fields]
         pend = bool(res) and not p.get("reviewed")
