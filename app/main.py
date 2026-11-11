@@ -394,7 +394,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         p = _rj_proc(cid, numero)
         res = p["result"]
         return {"numero": numero, "relatorio": res["relatorio"], "calculo": rj.calcular(res["relatorio"]), "reviewed": bool(p.get("reviewed")),
-                "citacoes_invalidas": res.get("citacoes_invalidas") or [], "sistema": res.get("sistema"),
+                "citacoes_invalidas": res.get("citacoes_invalidas") or [], "sistema": res.get("sistema"), "complemento": res.get("rj_merge"),
+                "editados": res["relatorio"].get("_editados") or [],
                 "secoes": [{"chave": k, "titulo": t} for k, t in rj.SECOES],
                 "campos": [{"chave": k, "rotulo": r, "tipo": t, "secao": sec, "dica": d} for k, r, t, sec, d in rj.CAMPOS]}
 
@@ -405,7 +406,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         p = _rj_proc(cid, numero)
         res = p["result"]
         _baseline(cid, numero, p)
-        res["relatorio"] = rj.normalizar_salvo(body.relatorio)
+        res["relatorio"] = rj.marcar_edicoes(res["relatorio"], rj.normalizar_salvo(body.relatorio))  # o que o analista mudou fica protegido
         pages = []
         for d in db.docs_for_process(cid, numero):
             try:
@@ -552,8 +553,9 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         return {"ok": True, "manual": body.manual}
 
     @app.post("/api/cases/{cid}/processes/{numero}/reextract", status_code=202)
-    def reextract(cid: str, numero: str):
-        """Refaz a extração juntando todas as partes (descarta edições da revisão)."""
+    def reextract(cid: str, numero: str, modo: str = "complementar"):
+        """Refaz a extração juntando todas as partes (descarta edições da revisão). Recuperação Judicial: por padrão COMPLEMENTA o
+        relatório existente (nada some, edições do analista ficam); `modo=zero` refaz do zero."""
         p0 = db.get_process(cid, numero)
         if not p0:
             raise HTTPException(404, "Processo não encontrado.")
@@ -561,7 +563,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
             raise HTTPException(409, "Este processo está marcado como feito manualmente. Desfaça a marcação para extrair com a IA.")
         db.update_process(cid, numero, reviewed=0, error=None)  # o erro antigo não fica na tela enquanto refaz
         db.mark_stale(cid, numero)
-        queue.enqueue(f"{EXTRACT_PREFIX}{cid}|{numero}")
+        queue.enqueue(f"{EXTRACT_PREFIX}{cid}|{numero}" + ("|zero" if modo == "zero" else ""))
         return {"status": "queued"}
 
     @app.post("/api/cases/{cid}/mcfly")

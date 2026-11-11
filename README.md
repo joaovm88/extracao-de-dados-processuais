@@ -165,3 +165,8 @@ Ao enviar os PDFs de uma RJ, escolha o tipo **Recuperação Judicial**. O proces
 ## PDFs em lote: excluir e reprocessar
 
 Na janela **📎 PDFs**: caixas de seleção por arquivo, *Selecionar os com erro*, *Excluir selecionados* e *Reprocessar selecionados*. Excluir PDFs que deram erro (nunca foram lidos) não refaz nenhuma extração; excluir um PDF já lido reextrai o processo uma única vez. Os erros de leitura aparecem em linguagem simples (arquivo corrompido, com senha etc.), com o detalhe técnico ao passar o mouse.
+
+## RJ: complementar com PDFs novos e visual do relatório
+
+- **Complementar, não refazer:** *⟳ Atualizar com os PDFs* (painel do processo de RJ) lê os PDFs de novo **e completa o relatório existente**: a IA recebe o relatório atual junto com os documentos; o código garante que nada que já constava some, que o vazio é preenchido, que o que você editou na tela fica protegido (etiqueta *protegido*) e que as tabelas só ganham linhas (união por CNPJ, classe, bem, quadro e data). A janela do relatório mostra o que o último complemento fez. *Refazer do zero* descarta tudo (com confirmação).
+- **Visual do relatório (Word e PDF):** faixa de título, *resumo executivo* no topo, *pontos de atenção* (somas que não fecham, plano aprovado e não homologado, créditos da União etc.), linha do tempo das datas-chave, seções numeradas, fichas de rótulo e valor, tabelas com cabeçalho e linhas alternadas, cartões com os números principais, gráfico de barras do passivo por classe, cronologia em tabela de datas e origens em cinza (para não poluir a leitura). Paleta sóbria (azul-marinho e um azul de destaque; âmbar só nos pontos de atenção) e texto corrido, sem marcadores.

@@ -192,7 +192,7 @@ def extract_ready(case_id: str, settings: Settings, db: MetadataDB, store: Searc
 
 
 def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataDB, store: SearchStore,
-                    llm_client=None) -> None:
+                    llm_client=None, zero: bool = False) -> None:
     if (db.get_process(case_id, numero) or {}).get("manual"):
         return
     if not db.claim_extraction(case_id, numero):
@@ -228,18 +228,25 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
             else:
                 context, info = ex.select_context_info(pages, settings.context_budget_chars, store, [d["id"] for d in docs])
             t_ia = time.perf_counter()
-            out = (ex.extract_rj(prompt, context, llm, sistema, com_indice=usar_eventos) if sheet is None
+            antigo = None if zero or sheet is not None else ((proc.get("result") or {}).get("relatorio"))  # RJ: complementa o que já existe
+            out = (ex.extract_rj(prompt, context, llm, sistema, com_indice=usar_eventos, atual=antigo) if sheet is None
                    else ex.extract_with_llm(sheet, prompt, context, llm, sistema, com_indice=usar_eventos))
             result["medidas"] = {"contexto": info, "tokens": getattr(llm, "last_usage", None),
                                  "extracao_s": round(time.perf_counter() - t_ia, 1),
                                  "chamada": getattr(llm, "last_call", None)}
             if sheet is None:  # Recuperação Judicial: o relatório fica em result["relatorio"]; as citações são conferidas com o PDF
                 from . import rj
+                resumo_hist = f"relatório de RJ · {len(pages)} página(s) lidas"
+                if antigo:  # complementa: nada que já constava some; o que o analista editou fica; o vazio é preenchido
+                    out, mi = rj.mesclar(antigo, out)
+                    result["rj_merge"] = {**mi, "em": time.time()}
+                    resumo_hist = (f"relatório de RJ complementado: {mi['preenchidos']} campo(s) preenchido(s), {mi['atualizados']} atualizado(s), "
+                                   f"{mi['linhas_novas']} linha(s) nova(s), {mi['mantidos_por_edicao']} mantido(s) por edição sua")
                 result.update(fields={}, relatorio=out, modo="llm", provedor=llm.name)
                 result["citacoes_invalidas"] = ex.check_citations(rj.textos(out), pages, sistema)
                 db.finish_extraction(case_id, numero, result=result, classe=classe, sheet=sheet_key, sistema=sistema,
                                      reviewed=0, error=None, ext_finished_at=time.time(), ext_status="ok")
-                db.add_history(case_id, numero, "Extração pela IA", f"relatório de RJ · {len(pages)} página(s) lidas", {"result": result, "reviewed": 0})
+                db.add_history(case_id, numero, "Extração pela IA" if not antigo else "Complemento pela IA", resumo_hist, {"result": result, "reviewed": 0})
                 return
             result["fields"].update({f.key: out.get(f.key) for f in sheet.ai_fields})
             result["fields"]["observacoes"] = ex.format_cronologia(result["fields"].get("observacoes"))  # um ato por linha
@@ -268,8 +275,8 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
 
 def handle_job(job: str, settings: Settings, db: MetadataDB, store: SearchStore, llm_client=None) -> None:
     if job.startswith(EXTRACT_PREFIX):  # reextração sob pedido: "extract:<case_id>|<numero>"
-        case_id, numero = job[len(EXTRACT_PREFIX):].split("|", 1)
-        extract_process(case_id, numero, settings, db, store, llm_client)
+        partes = job[len(EXTRACT_PREFIX):].split("|")  # "<case_id>|<numero>[|zero]": zero = refazer do zero (RJ)
+        extract_process(partes[0], partes[1], settings, db, store, llm_client, zero=len(partes) > 2 and partes[2] == "zero")
     elif job.startswith(READY_PREFIX):  # destrava o caso (ex.: PDF excluído) e extrai o que estiver pendente
         extract_ready(job[len(READY_PREFIX):], settings, db, store, llm_client)
     else:

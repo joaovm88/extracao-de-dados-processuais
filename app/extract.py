@@ -242,12 +242,13 @@ def extract_with_llm(sheet: Sheet, prompt_name: str, context: str, llm, sistema=
     return validate(sheet, llm.extract(system, f"Processo para análise:\n\n{context}", tool_schema(sheet)))
 
 
-def extract_rj(prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False) -> dict:
+def extract_rj(prompt_name: str, context: str, llm, sistema=None, com_indice: bool = False, atual: Optional[dict] = None) -> dict:
     """Relatório de Recuperação Judicial: a IA preenche campos (valor + origem), tabelas e a cronologia; o código padroniza e calcula."""
     from . import rj
 
     system = _system_extracao(prompt_name, sistema, com_indice, rotulo_saida="relatorio")
-    return rj.normalizar(llm.extract(system, f"Processo para análise:\n\n{context}", rj.schema()))
+    previa = rj.contexto_atual(atual) if atual else ""  # complementar: a IA vê o relatório atual e os documentos (antigos e novos)
+    return rj.normalizar(llm.extract(system, f"{previa}Processo para análise:\n\n{context}", rj.schema()))
 
 
 def validate(sheet: Sheet, data: dict) -> dict:

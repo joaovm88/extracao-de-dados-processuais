@@ -1344,10 +1344,16 @@ def test_rj_classification_and_report_math_and_no_bullets():
     assert calc["desagio"] == round(esperado, 2) == 68.96 and calc["base"] == "R$ 45.689.758,53" and len(calc["memoria"]) == 3
     assert any("QGC (Recuperandas)" in a for a in calc["avisos"])  # classes somam R$ 30,00 mas o total informado é R$ 100,00
     assert "PAGAMENTO DOS CRÉDITOS TRABALHISTAS (CLASSE I)" in calc["nao_consta"]  # campo não preenchido pela IA
-    texto = "\n".join(" ".join(str(x) for x in b[1:] if isinstance(x, str)) for b in rj.blocos(rel, "5001471-26.2023.8.13.0388"))
-    assert "Em 19/06/2023, apresentado o relatório" in texto and texto.index("19/06/2023") < texto.index("19/10/2023")  # observações em ordem de data
-    assert "Não consta nos documentos analisados." in texto and "DESÁGIO PONDERADO GERAL" in texto and "68,96%" in texto
+    texto = rj.texto_plano(rel, "5001471-26.2023.8.13.0388")
+    assert "Apresentado o relatório de constatação prévia" in texto and texto.index("19/06/2023") < texto.index("19/10/2023")  # cronologia em ordem de data
+    assert "Não consta nos documentos analisados." in texto and "CÁLCULO DO DESÁGIO PONDERADO" in texto and "68,96%" in texto
     assert not any(ch in texto for ch in "•●▪◦") and "\n- " not in texto  # sem marcadores
+    # visual law moderado: resumo executivo, linha do tempo e gráfico por classe; origens separadas do texto
+    tipos = [b[0] for b in rj.blocos(rel, "5001471-26.2023.8.13.0388")]
+    assert tipos[:2] == ["titulo", "resumo"] and "timeline" in tipos and "cartoes" in tipos and "barras" in tipos and "cronologia" in tipos
+    assert rj.segmentos("Aprovado em 22/08/2024 (ID 123, pg. 4) e homologado.") == [("Aprovado em 22/08/2024 ", False), ("(ID 123, pg. 4)", True), (" e homologado.", False)]
+    assert rj._frase("A União exigiu a certidão do art. 57 da Lei 11.101/2005 (ID 1, pg. 2). Depois outra frase.") == "A União exigiu a certidão do art. 57 da Lei 11.101/2005."
+    assert [d for _, d, _ in rj.datas_chave(rel)] == ["26/05/2023", "09/06/2025"]
     # sem valor por classe, não inventa o deságio
     assert rj.calcular(rj.normalizar({"classes": [{"classe": "Classe III", "desagio_percentual": 70}]}))["desagio"] is None
 
@@ -1382,11 +1388,12 @@ def test_rj_end_to_end_report_edit_downloads_and_stays_out_of_the_spreadsheet(en
     w = c.get(f"{base}/rj.docx")
     assert w.status_code == 200 and "wordprocessingml" in w.headers["content-type"] and "Relatorio RJ" in w.headers["content-disposition"]
     D = docx.Document(io.BytesIO(w.content))
-    corpo = "\n".join(p.text for p in D.paragraphs)
-    assert "RELATÓRIO – RECUPERAÇÃO JUDICIAL" in corpo and "O FGTS está incluído na Classe I (VOL 001, pg. 2)." in corpo and "Luza Indústria e Comércio de Alimentos S.A" in corpo
+    corpo = "\n".join([p.text for p in D.paragraphs] + [c.text for t in D.tables for row in t.rows for c in row.cells])
+    assert "RELATÓRIO – RECUPERAÇÃO JUDICIAL" in corpo and "RESUMO EXECUTIVO" in corpo and "O FGTS está incluído na Classe I." in corpo and "(VOL 001, pg. 2)" in corpo
+    assert "Luza Indústria e Comércio de Alimentos S.A" in corpo
     assert not any(p.style.name.lower().startswith("list") for p in D.paragraphs)  # nenhum parágrafo de lista
     pdf = pymupdf.open(stream=c.get(f"{base}/rj.pdf").content)
-    assert "DESÁGIO PONDERADO GERAL" in "".join(p.get_text() for p in pdf)
+    assert "CÁLCULO DO DESÁGIO PONDERADO" in "".join(p.get_text() for p in pdf) and "RESUMO EXECUTIVO" in pdf[0].get_text()
     # fora da planilha de execuções e sem editar campos de planilha
     wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
     assert all(numero not in [x.value for row in ws.iter_rows() for x in row] for ws in wb.worksheets)
@@ -1432,3 +1439,60 @@ def test_pdf_read_error_is_explained_without_internal_paths():
     m = explain_pdf_error(RuntimeError("Failed to open file '/data/uploads/abc123.pdf' as type pdf."))
     assert m.startswith("Não foi possível abrir este PDF") and "/data/uploads" not in m and "'abc123.pdf'" in m
     assert "senha" in explain_pdf_error(ValueError("document is encrypted, password required"))
+
+
+def test_rj_new_pdfs_complement_the_report_without_erasing_or_overriding_edits(env):
+    from app import rj
+    c, llm, tmp = env
+    llm.payload = dict(RJ_PAYLOAD)
+    cid = c.post("/api/cases", json={"nome": "Grupo Luza"}).json()["id"]
+    numero = "5001471-26.2023.8.13.0388"
+    make_pdf(tmp / "a.pdf")
+    d1 = c.post("/api/documents", files={"file": (f"{numero}_PARTE_1.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid, "tipo": "recuperacao_judicial"}).json()
+    wait(c, d1["id"])
+    base = f"/api/cases/{cid}/processes/{numero}"
+    r = c.get(f"{base}/rj").json()["relatorio"]
+    r["campos"]["vara"] = {"valor": "Vara EDITADA pelo analista", "origem": None}  # edição do analista
+    r["empresas"].append({"nome": "Empresa Extra Ltda", "cnpj": "11.111.111/0001-11", "em_recuperacao_judicial": "SIM", "origem": None})
+    c.put(f"{base}/rj", json={"relatorio": r, "reviewed": True})
+    assert "campo:vara" in c.get(f"{base}/rj").json()["editados"]
+    # PDFs complementares: a IA agora devolve MENOS coisa (esqueceu empresas e a vara) e traz dados novos
+    llm.payload = {"vara": {"valor": "Vara diferente da IA"}, "fgts": {"valor": "FGTS incluído na Classe I.", "origem": "VOL 001, pg. 2"},
+                   "data_concessao": {"valor": "10/06/2025", "origem": "VOL 001, pg. 4"}, "numero_rj": {"valor": None},
+                   "empresas": [{"nome": "Luza Indústria e Comércio de Alimentos S.A", "cnpj": "22.135.959/0006-81", "em_recuperacao_judicial": "SIM"},
+                                {"nome": "Terceira Empresa S/A", "cnpj": "33.333.333/0001-33"}],
+                   "observacoes": [{"data": "01/07/2025", "texto": "Novo ato do processo", "origem": "VOL 001, pg. 5"}]}
+    make_pdf(tmp / "b.pdf")
+    d2 = c.post("/api/documents", files={"file": (f"{numero}_PARTE_2.pdf", (tmp / "b.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid, "tipo": "recuperacao_judicial"}).json()
+    for _ in range(100):  # processo revisado: o PDF novo é lido, mas a extração só roda sob pedido (estado "novas partes")
+        if c.get(f"/api/documents/{d2['id']}").json()["status"] == "done":
+            break
+        time.sleep(0.1)
+    assert c.get(base).json()["stale"] == 1
+    assert c.post(f"{base}/reextract").status_code == 202  # padrão: complementar
+    for _ in range(120):
+        p = c.get(base).json()
+        if p["stale"] == 0 and p["result"].get("rj_merge"):
+            break
+        time.sleep(0.1)
+    sistema = c.get(f"{base}/rj").json()
+    rel = sistema["relatorio"]
+    cp = rel["campos"]
+    assert cp["vara"]["valor"] == "Vara EDITADA pelo analista"  # edição protegida
+    assert cp["numero_rj"]["valor"] == "5001471-26.2023.8.13.0388" and cp["aprovado_agc"]["valor"] == "SIM"  # o que a IA esqueceu NÃO some
+    assert cp["fgts"]["valor"] == "FGTS incluído na Classe I." and cp["data_concessao"]["valor"] == "10/06/2025"  # novo preenche; mais recente atualiza
+    nomes = [e["nome"] for e in rel["empresas"]]
+    assert "Empresa Extra Ltda" in nomes and "Terceira Empresa S/A" in nomes and len(nomes) == 4  # união das empresas, sem duplicar
+    assert len(rel["classes"]) == 3 and len(rel["observacoes"]) == 3 and rel["observacoes"][-1]["texto"] == "Novo ato do processo"
+    m = sistema["complemento"]
+    assert m["preenchidos"] >= 1 and m["atualizados"] >= 1 and m["linhas_novas"] >= 2 and m["mantidos_por_edicao"] == 1
+    assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Complemento pela IA" and c.get(base).json()["reviewed"] == 0
+    # refazer do zero descarta tudo
+    llm.payload = {"vara": {"valor": "Só a vara"}}
+    c.post(f"{base}/reextract?modo=zero")
+    for _ in range(120):
+        p = c.get(base).json()
+        if p["stale"] == 0 and p["result"]["relatorio"]["campos"]["vara"]["valor"] == "Só a vara":
+            break
+        time.sleep(0.1)
+    assert c.get(f"{base}/rj").json()["relatorio"]["campos"]["numero_rj"]["valor"] is None and not c.get(f"{base}/rj").json()["complemento"]

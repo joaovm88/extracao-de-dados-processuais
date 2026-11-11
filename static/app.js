@@ -369,7 +369,9 @@ function renderAssistInfo() {
     <div class="acts">${ed ? `<button class="btn sm primary" data-toggle-rev>${l.reviewed ? '↺ Marcar como a revisar' : '✓ Marcar como revisado'}</button>` : ''}
       ${l.n_eventos ? `<button class="btn sm" data-eventos title="Todos os eventos lidos do PDF, sem IA">📅 Eventos (${l.n_eventos})</button>` : ''}
       ${!l.manual?.ativo ? '<button class="btn sm" data-manual-on title="Registra que este processo foi feito à mão: a IA não o extrai e a planilha mostra isso nas observações">✍ Feito manualmente</button>' : ''}
-      ${l.docs.length && !l.manual?.ativo ? `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>` : ''}</div>
+      ${l.docs.length && !l.manual?.ativo ? (l.aba === 'rj' && l.rj
+        ? `<button class="btn sm primary" data-rj-upd title="Lê os PDFs de novo e COMPLETA o relatório: nada que já consta é apagado e as suas edições ficam protegidas">⟳ Atualizar com os PDFs</button><button class="btn sm" data-reextract title="Descarta o relatório e as suas edições e refaz tudo do zero">Refazer do zero</button>`
+        : `<button class="btn sm" data-reextract title="Refaz a extração com todas as partes (descarta edições)">⟳ Refazer extração</button>`) : ''}</div>
     ${l.aba === 'rj' && l.rj ? `<div class="acts"><button class="btn sm primary" data-rj-open="${esc(l.numero)}">📄 Abrir relatório</button><button class="btn sm" data-rj-dl="docx|${esc(l.numero)}">⬇ Word</button><button class="btn sm" data-rj-dl="pdf|${esc(l.numero)}">⬇ PDF</button></div>` : ''}
     <div class="acts sec">${l.estado !== 'sem_pdf' || l.manual?.ativo ? '<button class="btn sm" data-hist title="Versões anteriores deste processo, com a opção de voltar">🕘 Histórico</button>' : ''}
       <button class="btn sm" data-ocultar title="${l.oculto ? 'Volta a aparecer na tabela e na planilha' : 'Tira da tabela e da planilha exportada, sem apagar nada'}">${l.oculto ? '👁 Reexibir' : '🙈 Ocultar'}</button>
@@ -387,7 +389,8 @@ function renderAssistInfo() {
   q('[data-copy-num]') && (q('[data-copy-num]').onclick = () => copiar(l.numero, 'Número copiado'));
   q('[data-manual-on]') && (q('[data-manual-on]').onclick = () => setManual(l.numero, true));
   q('[data-manual-off]') && (q('[data-manual-off]').onclick = () => setManual(l.numero, false));
-  q('[data-reextract]') && (q('[data-reextract]').onclick = () => reextract(l.numero, true));
+  q('[data-reextract]') && (q('[data-reextract]').onclick = () => reextract(l.numero, true, l.aba === 'rj' ? 'zero' : undefined));
+  q('[data-rj-upd]') && (q('[data-rj-upd]').onclick = () => reextract(l.numero, false, 'complementar'));
   q('[data-eventos]') && (q('[data-eventos]').onclick = () => openEventos(l.numero));
   q('[data-toggle-rev]') && (q('[data-toggle-rev]').onclick = () => setReviewed(l.numero, !l.reviewed));
   $('assist-info').querySelectorAll('[data-del]').forEach(b => b.onclick = () => delDoc(b.dataset.del));
@@ -498,10 +501,11 @@ function renderRj() {
     const ent = f.tipo === 'paragrafo' ? `<textarea class="rj-ta" rows="3" data-rj-k="${f.chave}">${esc(x.valor ?? '')}</textarea>`
       : f.tipo === 'simnao' ? `<select data-rj-k="${f.chave}"><option value=""></option><option ${x.valor === 'SIM' ? 'selected' : ''}>SIM</option><option ${x.valor === 'NÃO' ? 'selected' : ''}>NÃO</option></select>`
       : inp('rj-in', `data-rj-k="${f.chave}" placeholder="${f.tipo === 'data' ? 'dd/mm/aaaa' : f.tipo === 'moeda' ? 'R$ 0,00' : ''}"`, x.valor);
-    return `<div class="rj-f ${x.valor ? '' : 'vazio'}" title="${esc(f.dica)}"><label>${esc(f.rotulo)}</label>${ent}${inp('rj-in rj-or', `data-rj-o="${f.chave}" placeholder="Origem (ex.: ID 123, pg. 4)"`, x.origem)}</div>`; };
+    return `<div class="rj-f ${x.valor ? '' : 'vazio'}" title="${esc(f.dica)}"><label>${esc(f.rotulo)}${rjd.editados.includes('campo:' + f.chave) ? '<span class="tag" title="Você editou este campo: novos PDFs não o sobrescrevem">protegido</span>' : ''}</label>${ent}${inp('rj-in rj-or', `data-rj-o="${f.chave}" placeholder="Origem (ex.: ID 123, pg. 4)"`, x.origem)}</div>`; };
   const cabeca = `<div class="rj-resumo"><div class="kpis"><div class="kpi"><span>Deságio ponderado geral<i class="tip" tabindex="0" data-tip="Média do deságio de cada classe, ponderada pelo valor da classe no quadro de credores. Calculada pelo sistema a partir das tabelas abaixo.">*</i></span><b>${calc.desagio != null ? String(calc.desagio).replace('.', ',') + '%' : '—'}</b><small>${calc.base ? `base ${esc(calc.base)}` : 'preencha o valor e o deságio de cada classe'}</small></div>
     <div class="kpi"><span>Campos sem informação</span><b>${calc.nao_consta.length}</b><small>saem como “Não consta nos documentos analisados”</small></div>
     <div class="kpi"><span>Pontos a conferir</span><b>${calc.avisos.length + rjd.citacoes_invalidas.length}</b><small>somas e citações</small></div></div>
+    ${rjd.complemento ? `<div class="alert info"><b>Relatório complementado com PDFs novos</b> (${dh(rjd.complemento.em)}): ${rjd.complemento.preenchidos} campo(s) preenchido(s), ${rjd.complemento.atualizados} atualizado(s), ${rjd.complemento.linhas_novas} linha(s) nova(s) nas tabelas${rjd.complemento.mantidos_por_edicao ? `, ${rjd.complemento.mantidos_por_edicao} mantido(s) porque você os editou` : ''}. Nada que já constava foi apagado.</div>` : ''}
     ${calc.avisos.map(a => `<div class="alert warn">${esc(a)}</div>`).join('')}${rjd.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(rjd.citacoes_invalidas.join('; '))}</div>` : ''}</div>`;
   const tabs = {
     identificacao: () => `<h4>Empresas recuperandas</h4>${rjTabela(rel.empresas, [{k: 'nome', t: 'Empresa', w: 42}, {k: 'cnpj', t: 'CNPJ', w: 22}, {k: 'em_recuperacao_judicial', t: 'Consta “em recuperação judicial”?', w: 16, sel: ['SIM', 'NÃO']}, {k: 'origem', t: 'Origem', w: 16}], 'Nenhuma empresa informada.')}`,
@@ -569,9 +573,9 @@ async function setManual(numero, ativo) {
   try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/manual`, json('PUT', {manual: ativo, nota})); toast(ativo ? 'Marcado como feito manualmente' : 'Marcação desfeita', 'ok'); refresh(true); }
   catch (e) { toast(e.message, 'err'); }
 }
-async function reextract(numero, ask) {
-  if (ask && !confirm('Refazer a extração com todas as partes? As suas edições neste processo serão descartadas.')) return;
-  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/reextract`, {method: 'POST'}); toast('Extração reiniciada'); refresh(true); } catch (e) { toast(e.message, 'err'); }
+async function reextract(numero, ask, modo) {
+  if (ask && !confirm(modo === 'zero' ? 'Refazer o relatório DO ZERO? O relatório atual e as suas edições serão descartados.\n\nPara só acrescentar as informações dos PDFs novos, use “Atualizar com os PDFs”.' : 'Refazer a extração com todas as partes? As suas edições neste processo serão descartadas.')) return;
+  try { await api(`/api/cases/${caseId}/processes/${enc(numero)}/reextract${modo ? `?modo=${modo}` : ''}`, {method: 'POST'}); toast(modo === 'complementar' ? 'Atualizando o relatório com os PDFs (nada será apagado)…' : 'Extração reiniciada'); refresh(true); } catch (e) { toast(e.message, 'err'); }
 }
 async function delDoc(id) {
   if (!confirm('Excluir este PDF? O processo será reextraído sem ele.')) return;

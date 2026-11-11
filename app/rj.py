@@ -142,6 +142,106 @@ def normalizar_salvo(rel: dict) -> dict:
     return normalizar({**((rel or {}).get("campos") or {}), **{k: (rel or {}).get(k) for k in ("empresas", "classes", "bens", "qgc", "observacoes")}})
 
 
+# ---------------- complementar o relatório com PDFs novos (sem apagar o que já consta) ----------------
+def _nk(s) -> str:
+    import unicodedata
+    t = "".join(c for c in unicodedata.normalize("NFD", str(s or "")) if unicodedata.category(c) != "Mn").lower()
+    return re.sub(r"[^a-z0-9]+", " ", t).strip()
+
+
+_CHAVES = {
+    "empresas": lambda e: re.sub(r"\D", "", e.get("cnpj") or "") or _nk(e.get("nome")),
+    "classes": lambda c: _nk(c.get("classe")),
+    "bens": lambda b: (_nk(b.get("tipo")), _nk(b.get("localidade"))),
+    "qgc": lambda q: (_nk(q.get("fonte")), q.get("data") or ""),
+    "observacoes": lambda o: (o.get("data") or "", _nk(o.get("origem")) or _nk(o.get("texto"))[:40]),
+}
+
+
+def _mescla_lista(nome: str, antiga: list, nova: list, protegida: bool, info: dict, chave=None) -> list:
+    """Linhas antigas ficam (nunca se apaga); linhas novas entram; em linhas que casam, o antigo vazio é preenchido e, se a
+    tabela não foi editada pelo analista, o valor novo atualiza o antigo."""
+    chave = chave or _CHAVES[nome]
+    out = [dict(x) for x in antiga]
+    idx = {chave(x): i for i, x in enumerate(out) if chave(x)}
+    for r in nova:
+        k = chave(r)
+        if not k or k not in idx:
+            out.append(dict(r))
+            info["linhas_novas"] += 1
+            continue
+        row = out[idx[k]]
+        for f, v in r.items():
+            if v in (None, "", []):
+                continue
+            if f == "classes":  # QGC: classes dentro do quadro
+                row[f] = _mescla_lista("qgc_classes", row.get(f) or [], v, protegida, info, lambda c: _nk(c.get("classe")))
+            elif row.get(f) in (None, ""):
+                row[f] = v
+            elif not protegida and row[f] != v:
+                row[f] = v
+                info["atualizados"] += 1
+    return out
+
+
+def mesclar(antigo: dict, novo: dict) -> tuple[dict, dict]:
+    """Relatório já existente + extração com PDFs novos -> relatório complementado. Garantias: nada que já constava some;
+    o que o analista editou não é sobrescrito; o que estava em branco é preenchido."""
+    ed = set(antigo.get("_editados") or [])
+    info = {"preenchidos": 0, "atualizados": 0, "linhas_novas": 0, "mantidos_por_edicao": 0}
+    out: dict = {"campos": {}, "_editados": sorted(ed)}
+    for k in POR_CHAVE:
+        o = (antigo.get("campos") or {}).get(k) or {"valor": None, "origem": None}
+        n = (novo.get("campos") or {}).get(k) or {"valor": None, "origem": None}
+        ov, nv = o.get("valor"), n.get("valor")
+        if ov and f"campo:{k}" in ed:
+            out["campos"][k] = dict(o)
+            info["mantidos_por_edicao"] += bool(nv and nv != ov)
+        elif not nv:
+            out["campos"][k] = dict(o)
+        elif not ov:
+            out["campos"][k] = dict(n)
+            info["preenchidos"] += 1
+        elif nv != ov:
+            out["campos"][k] = dict(n)
+            info["atualizados"] += 1
+        else:
+            out["campos"][k] = {"valor": ov, "origem": o.get("origem") or n.get("origem")}
+    for nome in ("empresas", "classes", "bens", "qgc", "observacoes"):
+        out[nome] = _mescla_lista(nome, antigo.get(nome) or [], novo.get(nome) or [], f"tabela:{nome}" in ed, info)
+    return out, info
+
+
+def contexto_atual(rel: dict) -> str:
+    """Relatório atual em texto compacto, para a IA complementar (em vez de começar do zero)."""
+    import json as _json
+
+    campos = {k: {"valor": c.get("valor"), "origem": c.get("origem")} for k, c in (rel.get("campos") or {}).items() if c.get("valor")}
+    editados = [POR_CHAVE[e.split(":", 1)[1]][1] for e in rel.get("_editados") or [] if e.startswith("campo:") and e.split(":", 1)[1] in POR_CHAVE]
+    tabelas = [t for t in rel.get("_editados") or [] if t.startswith("tabela:")]
+    corpo = {**campos, **{k: rel.get(k) for k in ("empresas", "classes", "bens", "qgc", "observacoes") if rel.get(k)}}
+    return ("RELATÓRIO ATUAL (já preenchido a partir de PDFs anteriores e/ou revisado pelo analista). Complemente-o com os documentos abaixo: "
+            "preserve tudo o que já consta; preencha o que estava em branco; só altere um dado existente quando os documentos abaixo trouxerem "
+            "informação MAIS RECENTE ou que o contradiga, e nesse caso mencione a data da atualização no próprio texto. NUNCA apague informação. "
+            "Devolva o relatório COMPLETO (todos os campos e tabelas, inclusive o que já existia), no mesmo formato de resposta.\n"
+            + (f"Campos revisados pelo analista (NÃO altere): {'; '.join(editados)}.\n" if editados else "")
+            + (f"Tabelas revisadas pelo analista (só acrescente linhas): {', '.join(t.split(':')[1] for t in tabelas)}.\n" if tabelas else "")
+            + "```json\n" + _json.dumps(corpo, ensure_ascii=False) + "\n```\n\n")
+
+
+def marcar_edicoes(antigo: dict, novo: dict) -> dict:
+    """Quais campos e tabelas o analista mudou na tela (ficam protegidos quando novos PDFs forem enviados)."""
+    ed = set(antigo.get("_editados") or [])
+    for k in POR_CHAVE:
+        if (novo["campos"].get(k) or {}) != ((antigo.get("campos") or {}).get(k) or {}) and (novo["campos"].get(k) or {}).get("valor"):
+            ed.add(f"campo:{k}")
+    for nome in ("empresas", "classes", "bens", "qgc", "observacoes"):
+        if (novo.get(nome) or []) != (antigo.get(nome) or []):
+            ed.add(f"tabela:{nome}")
+    novo["_editados"] = sorted(ed)
+    return novo
+
+
 def _chave_data(d: Optional[str]) -> str:
     m = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", d or "")
     return f"{m.group(3)}-{m.group(2)}-{m.group(1)}" if m else "9999"
@@ -195,12 +295,15 @@ def textos(rel: dict) -> list[str]:
 
 
 # ---------------- montagem do documento (blocos) ----------------
-def _com_origem(valor: Optional[str], origem: Optional[str]) -> str:
-    if not valor:
-        return NC
-    if origem and origem not in valor:
-        valor = valor.rstrip(" .") + f" ({origem})."
-    return valor if valor.endswith((".", "?", "!", ")")) or re.search(r"\)\.?$", valor) else valor + "."
+# Paleta sóbria (documento formal): azul-marinho nos títulos, um azul de destaque e âmbar só para pontos de atenção.
+NAVY, ACCENT, GRAY, LIGHT, AMBER_BG, AMBER, LINE = "0F2A4D", "1351B4", "5D6B7C", "EEF2F7", "FFF4D6", "C98A00", "C9D3E0"
+_ORIG = re.compile(r"(\((?:Evento|ID|VOL)\b[^)]*\))")
+_DATA = re.compile(r"\d{2}/\d{2}/\d{4}")
+
+
+def segmentos(texto: str) -> list[tuple[str, bool]]:
+    """Separa o texto das origens '(ID 123, pg. 4)', que o documento mostra em cinza e menor, para não poluir a leitura."""
+    return [(p, bool(_ORIG.fullmatch(p))) for p in _ORIG.split(texto or "") if p]
 
 
 def _lista_em_prosa(itens: list[str]) -> str:
@@ -208,207 +311,574 @@ def _lista_em_prosa(itens: list[str]) -> str:
     return itens[0] if len(itens) == 1 else (", ".join(itens[:-1]) + " e " + itens[-1]) if itens else ""
 
 
+_ABREV = {"art", "arts", "n", "nº", "no", "pg", "pgs", "fls", "inc", "dr", "dra", "sr", "sra", "ltda", "s.a", "proc", "cf", "p", "v", "ex", "obs"}
+
+
+def _frase(t: Optional[str], limite: int = 170) -> str:
+    """Primeira frase do texto (sem as origens), sem cortar em abreviações como 'art.' ou 'nº'."""
+    t = " ".join(_ORIG.sub("", t or "").split())
+    t = re.sub(r"\s+([.,;:])", r"\1", t)
+    f = t
+    for m in re.finditer(r"[.!?](?=\s+[A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9]|$)", t):
+        palavra = re.findall(r"[\wÀ-ÿ.]+$", t[:m.start()])
+        if m.group(0) == "." and palavra and palavra[0].lower().rstrip(".") in _ABREV:
+            continue
+        f = t[:m.end()]
+        break
+    return f if len(f) <= limite else f[:limite - 1].rsplit(" ", 1)[0] + "…"
+
+
+def _v(rel: dict, k: str) -> tuple[Optional[str], Optional[str]]:
+    c = (rel.get("campos") or {}).get(k) or {}
+    return c.get("valor"), c.get("origem")
+
+
+def datas_chave(rel: dict) -> list[tuple[str, str, str]]:
+    """(chave de ordenação, dd/mm/aaaa, rótulo) das datas que marcam a linha do tempo do processo."""
+    itens = []
+    for k, rot in (("data_ajuizamento", "Ajuizamento"), ("data_deferimento", "Deferimento do processamento"), ("data_plano", "Apresentação do plano"),
+                   ("data_agc", "Assembleia de credores"), ("data_concessao", "Concessão da RJ"), ("data_encerramento", "Encerramento")):
+        v, _ = _v(rel, k)
+        if k == "data_concessao" and not v:
+            v, _ = _v(rel, "data_homologacao")
+        m = _DATA.search(v or "")
+        if m:
+            itens.append((_chave_data(m.group(0)), m.group(0), rot))
+    return sorted(itens)
+
+
+def resumo_linhas(rel: dict, numero: str, calc: dict) -> list[tuple[str, str, Optional[str]]]:
+    """Quadro-resumo do topo: (rótulo, valor, tipo) com tipo 'sn' (SIM/NÃO), 'nc' (não consta) ou None."""
+    def g(k):
+        return _v(rel, k)[0]
+    emp = [e["nome"] for e in rel.get("empresas") or [] if e.get("nome")]
+    linhas = [("Processo", numero, None), ("Vara", g("vara"), None), ("Administração judicial", g("administrador_judicial"), None),
+              ("Empresas recuperandas", (_lista_em_prosa(emp).rstrip(".") if emp else None), None),
+              ("Plano aprovado em assembleia", g("aprovado_agc"), "sn"), ("Plano homologado", g("homologado"), "sn"),
+              ("Recuperação encerrada", g("encerrada"), "sn"), ("Dívida sujeita à RJ", g("divida_total"), None),
+              ("Deságio ponderado geral", (f"{str(calc['desagio']).replace('.', ',')}%" if calc.get("desagio") is not None else None), None),
+              ("Créditos da União/INSS", _frase(g("valores_uniao"), 150) or None, None), ("Situação atual", _frase(g("situacao_atual"), 170) or None, None)]
+    return [(r, v or NC, ("nc" if not v else t)) for r, v, t in linhas]
+
+
+def pontos_atencao(rel: dict, calc: dict) -> list[str]:
+    out = list(calc["avisos"])
+    agc, homol = _v(rel, "aprovado_agc")[0], _v(rel, "homologado")[0]
+    if agc == "SIM" and homol == "NÃO":
+        out.append("O plano foi aprovado em assembleia, mas ainda não consta a sua homologação.")
+    for k, rot in (("valores_uniao", "Créditos da União/INSS"), ("certidao_art57", "Certidão do art. 57"), ("convolacao", "Convolação em falência"), ("fraude", "Indício de fraude")):
+        v = _v(rel, k)[0]
+        if v and not re.match(r"(?i)\s*(n[ãa]o|at[ée] o presente|nenhum|sem )", v):
+            out.append(f"{rot}: {_frase(v, 200)}")
+    return out
+
+
 def blocos(rel: dict, numero: str, hoje: Optional[date] = None) -> list[tuple]:
-    """('titulo'|'sub'|'secao'|'rot'|'par'|'tabela'|'nota', ...). Nada de marcadores: rótulo em negrito + texto, parágrafos e tabelas."""
+    """Documento como lista de blocos (a mesma para Word e PDF): titulo, resumo, atencao, timeline, secao, ficha, rot, tabela, cartoes,
+    barras, cronologia e nota. Texto corrido, sem marcadores; tabelas só para números e datas."""
     hoje = hoje or date.today()
     c = rel.get("campos") or {}
     calc = calcular(rel)
-    val = lambda k: _com_origem((c.get(k) or {}).get("valor"), (c.get(k) or {}).get("origem"))
-    B: list[tuple] = [("titulo", "RELATÓRIO – RECUPERAÇÃO JUDICIAL"),
-                      ("sub", f"Processo nº {numero} · elaborado em {hoje:%d/%m/%Y}")]
+    B: list[tuple] = [("titulo", "RELATÓRIO – RECUPERAÇÃO JUDICIAL", f"Processo nº {numero}", f"Elaborado em {hoje:%d/%m/%Y}"),
+                      ("resumo", resumo_linhas(rel, numero, calc))]
+    at = pontos_atencao(rel, calc)
+    if at:
+        B.append(("atencao", at))
+    tl = datas_chave(rel)
+    if len(tl) >= 2:
+        B.append(("timeline", [(d, r) for _, d, r in tl]))
+
+    def ficha_rot(chaves_secao: str, pular=()):
+        saida, grupo = [], []
+        for k, rot, tipo, sec, _ in CAMPOS:
+            if sec != chaves_secao or k in pular:
+                continue
+            valor, origem = (c.get(k) or {}).get("valor"), (c.get(k) or {}).get("origem")
+            if tipo == "paragrafo":
+                if grupo:
+                    saida.append(("ficha", grupo))
+                    grupo = []
+                saida.append(("rot", rot, valor or NC, origem if valor else None))
+            else:
+                grupo.append((rot, valor or NC, origem if valor else None))
+        if grupo:
+            saida.append(("ficha", grupo))
+        return saida
+
+    n = 0
     for chave, titulo in SECOES:
-        B.append(("secao", titulo))
+        n += 1
+        B.append(("secao", n, titulo))
         if chave == "identificacao":
             emp = rel.get("empresas") or []
             if emp:
                 nomes = [f"{e['nome'] or 'empresa sem nome'}" + (f" (CNPJ {e['cnpj']})" if e.get("cnpj") else "") for e in emp]
-                B.append(("rot", "EMPRESAS RECUPERANDAS", _lista_em_prosa(nomes).rstrip(".") + "."))
+                B.append(("rot", "EMPRESAS RECUPERANDAS", _lista_em_prosa(nomes).rstrip(".") + ".", None))
                 sim = [e["nome"] for e in emp if e.get("em_recuperacao_judicial") == "SIM" and e.get("nome")]
                 nao = [e["nome"] for e in emp if e.get("em_recuperacao_judicial") == "NÃO" and e.get("nome")]
                 if sim or nao:
                     partes = ([f"consta a expressão “em recuperação judicial” no nome de {_lista_em_prosa(sim)}"] if sim else []) + \
                              ([f"não consta no nome de {_lista_em_prosa(nao)}"] if nao else [])
                     frase = "; ".join(partes)
-                    B.append(("rot", "EXPRESSÃO “EM RECUPERAÇÃO JUDICIAL”", f"{frase[0].upper()}{frase[1:]}".rstrip(".") + "."))
+                    B.append(("rot", "EXPRESSÃO “EM RECUPERAÇÃO JUDICIAL”", f"{frase[0].upper()}{frase[1:]}".rstrip(".") + ".", None))
             else:
-                B.append(("rot", "EMPRESAS RECUPERANDAS", NC))
-        if chave == "bens":
-            for k in [x[0] for x in CAMPOS if x[3] == "bens" and x[0] == "laudo_bens"]:
-                B.append(("rot", POR_CHAVE[k][1], val(k)))
+                B.append(("rot", "EMPRESAS RECUPERANDAS", NC, None))
+            B += ficha_rot(chave)
+        elif chave == "plano":
+            fr = ficha_rot(chave)  # ficha das datas, parágrafo dos documentos, [tabela das classes], demais parágrafos
+            B += fr[:2]
+            if rel.get("classes"):
+                rows = [[cl.get("classe") or "", cl.get("proposta") or "–", cl.get("valor_sujeito") or "–",
+                         (f"{cl['desagio_percentual']:g}%".replace(".", ",") if cl.get("desagio_percentual") is not None else "–")] for cl in rel["classes"]]
+                B.append(("tabela", ["Classe de credores", "Proposta de pagamento", "Valor sujeito", "Deságio"], rows, [27, 41, 19, 13], "llrr"))
+            B += fr[2:]
+        elif chave == "bens":
+            cards = [("Dívida sujeita à RJ", (c.get("divida_total") or {}).get("valor") or "–", "valor total do passivo"),
+                     ("Deságio ponderado geral", f"{str(calc['desagio']).replace('.', ',')}%" if calc.get("desagio") is not None else "–", "média ponderada pelo valor de cada classe"),
+                     ("Bens: valor de mercado", calc.get("total_mercado") or "–", "soma do laudo de avaliação")]
+            B.append(("cartoes", cards))
+            lb = (c.get("laudo_bens") or {})
+            B.append(("rot", "LAUDO DE BENS", lb.get("valor") or NC, lb.get("origem") if lb.get("valor") else None))
             if rel.get("bens"):
                 rows = [[b.get("tipo") or "", b.get("valor_mercado") or "–", b.get("valor_liquidacao") or "–", b.get("localidade") or "–"] for b in rel["bens"]]
                 if calc.get("total_mercado") or calc.get("total_liquidacao"):
                     rows.append(["Total", calc.get("total_mercado") or "–", calc.get("total_liquidacao") or "–", ""])
-                B.append(("tabela", ["Bem avaliado", "Valor de mercado", "Liquidação forçada", "Localidade"], rows, [34, 22, 22, 22]))
+                B.append(("tabela", ["Bem avaliado", "Valor de mercado", "Liquidação forçada", "Localidade"], rows, [34, 22, 22, 22], "lrrl"))
             qgcs = rel.get("qgc") or []
             if qgcs:
                 classes = list(dict.fromkeys(cl["classe"] for q in qgcs for cl in q.get("classes") or []))
-                cab = ["Classe"] + [f"{q.get('fonte') or 'QGC'}" + (f" ({q['data']})" if q.get("data") else "") for q in qgcs]
+                cab = ["Classe (QGC)"] + [f"{q.get('fonte') or 'QGC'}" + (f" · {q['data']}" if q.get("data") else "") for q in qgcs]
                 rows = [[cl] + [next((x.get("valor") or "–" for x in q.get("classes") or [] if x.get("classe") == cl), "–") for q in qgcs] for cl in classes]
                 rows.append(["Total"] + [q.get("total") or "–" for q in qgcs])
-                B.append(("par", "Quadro geral de credores (QGC) apresentado pelas recuperandas e pela administração judicial, por classe de credores:"))
-                B.append(("tabela", cab, rows, [34] + [66 // len(qgcs)] * len(qgcs)))
+                B.append(("tabela", cab, rows, [34] + [66 // len(qgcs)] * len(qgcs), "l" + "r" * len(qgcs)))
                 orig = [f"{q.get('fonte') or 'QGC'}: {q['origem']}" for q in qgcs if q.get("origem")]
                 if orig:
                     B.append(("nota", "Origem dos quadros: " + "; ".join(orig) + "."))
-            for k in ("divida_total", "edital"):
-                B.append(("rot", POR_CHAVE[k][1], val(k)))
+            barras = [(cl["classe"], moeda_float(cl.get("valor_sujeito")), cl.get("valor_sujeito"),
+                       (f"deságio {cl['desagio_percentual']:g}%".replace(".", ",") if cl.get("desagio_percentual") is not None else ""))
+                      for cl in rel.get("classes") or [] if moeda_float(cl.get("valor_sujeito"))]
+            if len(barras) >= 2:
+                B.append(("barras", "Composição do passivo sujeito à RJ, por classe", barras))
+            ed = (c.get("edital") or {})
+            B.append(("ficha", [("PUBLICAÇÃO DO EDITAL", ed.get("valor") or NC, ed.get("origem") if ed.get("valor") else None)]))
             if calc.get("desagio") is not None:
-                B.append(("rot", "DESÁGIO PONDERADO GERAL", f"{str(calc['desagio']).replace('.', ',')}% sobre uma base de {calc['base']}, o que corresponde a um desconto total de "
-                                                             f"{calc['desconto_total']}. Cálculo: " + "; ".join(calc["memoria"]) + ". O deságio de cada classe é ponderado pelo respectivo valor no quadro de credores."))
+                B.append(("rot", "CÁLCULO DO DESÁGIO PONDERADO", f"{str(calc['desagio']).replace('.', ',')}% sobre uma base de {calc['base']}, o que corresponde a um desconto total de "
+                                                                 f"{calc['desconto_total']}. " + "; ".join(calc["memoria"]) + ". O deságio de cada classe é ponderado pelo respectivo valor no quadro de credores.", None))
             else:
-                B.append(("rot", "DESÁGIO PONDERADO GERAL", "Não foi possível calcular: faltam o valor por classe ou o deságio de alguma classe."))
-            continue
-        if chave == "plano":
-            for k in ("data_plano", "aditivos", "documentos_plano"):
-                B.append(("rot", POR_CHAVE[k][1], val(k)))
-            if rel.get("classes"):
-                nomes = [cl["classe"] for cl in rel["classes"]]
-                B.append(("rot", "CLASSES DE CREDORES", f"O plano prevê as seguintes classes: {_lista_em_prosa(nomes)}."))
-        if chave == "observacoes":
+                B.append(("rot", "CÁLCULO DO DESÁGIO PONDERADO", "Não foi possível calcular: faltam o valor por classe ou o deságio de alguma classe.", None))
+        elif chave == "observacoes":
             obs = sorted(rel.get("observacoes") or [], key=lambda o: _chave_data(o.get("data")))
-            if not obs:
-                B.append(("par", NC))
-            for o in obs:
-                txt = (o["texto"] or "").rstrip(" .")
-                B.append(("par", (f"Em {o['data']}, " if o.get("data") else "") + (txt[0].lower() + txt[1:] if o.get("data") and txt[:1].isupper() else txt)
-                          + (f" ({o['origem']})" if o.get("origem") and o["origem"] not in txt else "") + "."))
-            continue
-        for k, rot, _, sec, _ in CAMPOS:
-            if sec == chave and not (chave in ("bens", "plano") and k in ("laudo_bens", "divida_total", "edital", "data_plano", "aditivos", "documentos_plano")):
-                B.append(("rot", rot, val(k)))
+            B.append(("cronologia", [(o.get("data") or "s/d", (o["texto"] or "").rstrip(" ."), o.get("origem")) for o in obs]) if obs else ("rot", "CRONOLOGIA", NC, None))
+        else:
+            B += ficha_rot(chave)
     if calc["avisos"]:
         B.append(("nota", "Pontos a conferir: " + " ".join(calc["avisos"])))
     return B
 
 
+def texto_plano(rel: dict, numero: str) -> str:
+    """Todo o texto do documento, em ordem (para conferência e testes)."""
+    def achata(x):
+        if isinstance(x, str):
+            yield x
+        elif isinstance(x, (list, tuple)):
+            for y in x:
+                yield from achata(y)
+    return "\n".join(achata(blocos(rel, numero)))
+
+
 def _rot(r: str) -> str:
-    """Rótulo + dois-pontos (pergunta já termina em '?')."""
     return r if r.endswith("?") else r + ":"
 
 
+def _fmt_pct_barra(v: float, total: float) -> float:
+    return max(1.0, round(v / total * 100, 1)) if total else 0.0
+
+
+# ---------------- Word ----------------
 def gerar_docx(rel: dict, numero: str) -> bytes:
     from docx import Document
     from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Cm, Pt, RGBColor
 
     d = Document()
-    st = d.styles["Normal"]
-    st.font.name, st.font.size = "Calibri", Pt(11)
-    st.element.rPr.rFonts.set(qn("w:eastAsia"), "Calibri")
     sec = d.sections[0]
-    sec.left_margin = sec.right_margin = sec.top_margin = sec.bottom_margin = Pt(62)
-    p = sec.footer.paragraphs[0]
-    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    r = p.add_run(f"Recuperação Judicial nº {numero} · página ")
-    r.font.size = Pt(8)
-    for tag, txt in (("begin", None), (None, "PAGE"), ("end", None)):
-        run = p.add_run()
-        run.font.size = Pt(8)
-        if tag:
-            el = OxmlElement("w:fldChar")
-            el.set(qn("w:fldCharType"), tag)
-        else:
-            el = OxmlElement("w:instrText")
-            el.set(qn("xml:space"), "preserve")
-            el.text = txt
-        run._r.append(el)
+    sec.page_width, sec.page_height = Cm(21), Cm(29.7)
+    sec.left_margin = sec.right_margin = Cm(2)
+    sec.top_margin, sec.bottom_margin = Cm(2.2), Cm(2)
+    LARG = 17.0
+    st = d.styles["Normal"]
+    st.font.name, st.font.size = "Calibri", Pt(10.5)
+    st.element.rPr.rFonts.set(qn("w:eastAsia"), "Calibri")
+    st.paragraph_format.space_after = Pt(4)
+    rgb = lambda h: RGBColor.from_string(h)
+
+    def shade(cell, fill):
+        tc = cell._tc.get_or_add_tcPr()
+        el = OxmlElement("w:shd")
+        el.set(qn("w:val"), "clear")
+        el.set(qn("w:color"), "auto")
+        el.set(qn("w:fill"), fill)
+        tc.append(el)
+
+    def borders(cell, **kw):  # lado=(espessura em 1/8 pt, cor) ou None
+        tc = cell._tc.get_or_add_tcPr()
+        el = OxmlElement("w:tcBorders")
+        for lado in ("top", "left", "bottom", "right"):
+            b = OxmlElement(f"w:{lado}")
+            spec = kw.get(lado)
+            if spec:
+                b.set(qn("w:val"), "single")
+                b.set(qn("w:sz"), str(spec[0]))
+                b.set(qn("w:color"), spec[1])
+            else:
+                b.set(qn("w:val"), "nil")
+            el.append(b)
+        tc.append(el)
+
+    def margens(cell, v=60, h=100):
+        tc = cell._tc.get_or_add_tcPr()
+        el = OxmlElement("w:tcMar")
+        for lado, val in (("top", v), ("left", h), ("bottom", v), ("right", h)):
+            m = OxmlElement(f"w:{lado}")
+            m.set(qn("w:w"), str(val))
+            m.set(qn("w:type"), "dxa")
+            el.append(m)
+        tc.append(el)
+
+    def run(p, texto, bold=False, italic=False, size=None, color=None):
+        r = p.add_run(texto)
+        r.bold, r.italic = bold, italic
+        if size:
+            r.font.size = Pt(size)
+        if color:
+            r.font.color.rgb = rgb(color)
+        return r
+
+    def corpo(p, texto, size=10.5, italic=False, cor=None):  # texto com as origens em cinza e menor
+        for seg, orig in segmentos(texto):
+            run(p, seg, size=8.5 if orig else size, italic=italic, color=GRAY if orig else cor)
+
+    def tabela(larguras, linhas=0):
+        t = d.add_table(rows=linhas, cols=len(larguras))
+        t.autofit = False
+        t.alignment = WD_TABLE_ALIGNMENT.CENTER
+        pr = t._tbl.tblPr
+        lay = OxmlElement("w:tblLayout")
+        lay.set(qn("w:type"), "fixed")
+        pr.append(lay)
+        t._larg = larguras
+        for i, col in enumerate(t.columns):  # o Word e o LibreOffice leem as larguras da grade (tblGrid), não só das células
+            col.width = Cm(larguras[i])
+        return t
+
+    def nova_linha(t):
+        r = t.add_row()
+        for i, c in enumerate(r.cells):
+            c.width = Cm(t._larg[i])
+        return r
+
+    def cel(c, fill=None, **b):
+        if fill:
+            shade(c, fill)
+        borders(c, **b)
+        margens(c)
+        return c.paragraphs[0]
+
+    def espaco(pt=4):
+        p = d.add_paragraph()
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing = Pt(pt)
+        return p
+
+    # cabeçalho e rodapé
+    hp = sec.header.paragraphs[0]
+    hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    run(hp, f"Recuperação Judicial · Processo nº {numero}", size=8, color=GRAY)
+    pb = OxmlElement("w:pBdr")
+    bt = OxmlElement("w:bottom")
+    for k, v in (("val", "single"), ("sz", "4"), ("space", "4"), ("color", LINE)):
+        bt.set(qn(f"w:{k}"), v)
+    pb.append(bt)
+    hp._p.get_or_add_pPr().append(pb)
+    fp = sec.footer.paragraphs[0]
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    run(fp, "página ", size=8, color=GRAY)
+    for campo in ("PAGE", None, "NUMPAGES"):
+        if campo is None:
+            run(fp, " de ", size=8, color=GRAY)
+            continue
+        r = fp.add_run()
+        r.font.size, r.font.color.rgb = Pt(8), rgb(GRAY)
+        for tipo, txt in (("begin", None), (None, campo), ("end", None)):
+            if tipo:
+                el = OxmlElement("w:fldChar")
+                el.set(qn("w:fldCharType"), tipo)
+            else:
+                el = OxmlElement("w:instrText")
+                el.set(qn("xml:space"), "preserve")
+                el.text = txt
+            r._r.append(el)
+
     for b in blocos(rel, numero):
         k = b[0]
         if k == "titulo":
-            h = d.add_paragraph()
-            h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            x = h.add_run(b[1])
-            x.bold, x.font.size = True, Pt(16)
-        elif k == "sub":
-            h = d.add_paragraph()
-            h.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            x = h.add_run(b[1])
-            x.font.size, x.font.color.rgb = Pt(10), RGBColor(0x55, 0x65, 0x77)
+            t = tabela([LARG], 1)
+            p = cel(t.rows[0].cells[0], NAVY)
+            t.rows[0].cells[0].width = Cm(LARG)
+            run(p, b[1], bold=True, size=17, color="FFFFFF")
+            p2 = t.rows[0].cells[0].add_paragraph()
+            run(p2, f"{b[2]}  ·  {b[3]}", size=9.5, color=LINE)
+            espaco(8)
+        elif k == "resumo":
+            p = d.add_paragraph()
+            run(p, "RESUMO EXECUTIVO", bold=True, size=9, color=ACCENT)
+            p.paragraph_format.keep_with_next = True
+            t = tabela([5.0, 12.0])
+            for rot, val, tipo in b[1]:
+                r = nova_linha(t)
+                run(cel(r.cells[0], LIGHT, bottom=(4, "FFFFFF")), rot, bold=True, size=9, color=NAVY)
+                pv = cel(r.cells[1], None, bottom=(4, LINE))
+                if tipo == "nc":
+                    run(pv, val, italic=True, size=9.5, color=GRAY)
+                elif tipo == "sn":
+                    run(pv, val, bold=True, size=10, color=NAVY if val == "SIM" else "3A3A3A")
+                else:
+                    corpo(pv, val, size=10)
+            espaco(8)
+        elif k == "atencao":
+            t = tabela([LARG], 1)
+            p = cel(t.rows[0].cells[0], AMBER_BG, left=(24, AMBER))
+            t.rows[0].cells[0].width = Cm(LARG)
+            run(p, "PONTOS DE ATENÇÃO", bold=True, size=9, color="8A5A00")
+            for item in b[1]:
+                q = t.rows[0].cells[0].add_paragraph()
+                q.paragraph_format.space_after = Pt(2)
+                corpo(q, item, size=10)
+            espaco(8)
+        elif k == "timeline":
+            n = len(b[1])
+            t = tabela([LARG / n] * n, 2)
+            for i, (dt, rot) in enumerate(b[1]):
+                run(cel(t.rows[0].cells[i], None, top=(18, ACCENT)), dt, bold=True, size=10.5, color=NAVY).alignment = WD_ALIGN_PARAGRAPH.CENTER
+                t.rows[0].cells[i].paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                pr_ = cel(t.rows[1].cells[i], None)
+                pr_.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run(pr_, rot, size=8.5, color=GRAY)
+                t.rows[0].cells[i].width = t.rows[1].cells[i].width = Cm(LARG / n)
+            espaco(6)
         elif k == "secao":
-            h = d.add_heading(b[1].upper(), level=2)
-            h.paragraph_format.space_before = Pt(14)
-            for x in h.runs:
-                x.font.name, x.font.size, x.font.color.rgb = "Calibri", Pt(12), RGBColor(0x0F, 0x1B, 0x2D)
+            p = d.add_paragraph()
+            p.paragraph_format.space_before, p.paragraph_format.space_after = Pt(14), Pt(6)
+            p.paragraph_format.keep_with_next = True
+            run(p, f"{b[1]}  ", bold=True, size=12.5, color=ACCENT)
+            run(p, b[2].upper(), bold=True, size=11.5, color=NAVY)
+            pb = OxmlElement("w:pBdr")
+            bt = OxmlElement("w:bottom")
+            for kk, vv in (("val", "single"), ("sz", "6"), ("space", "2"), ("color", ACCENT)):
+                bt.set(qn(f"w:{kk}"), vv)
+            pb.append(bt)
+            p._p.get_or_add_pPr().append(pb)
+        elif k == "ficha":
+            t = tabela([5.0, 12.0])
+            for rot, val, origem in b[1]:
+                r = nova_linha(t)
+                run(cel(r.cells[0], None, bottom=(4, LINE)), rot, bold=True, size=8.5, color=NAVY)
+                pv = cel(r.cells[1], None, bottom=(4, LINE))
+                if val == NC:
+                    run(pv, val, italic=True, size=10, color=GRAY)
+                else:
+                    corpo(pv, val)
+                    if origem:
+                        run(pv, f"  ({origem})", size=8.5, color=GRAY)
+            espaco(4)
         elif k == "rot":
+            p = d.add_paragraph()
+            p.paragraph_format.space_before, p.paragraph_format.space_after = Pt(8), Pt(1)
+            p.paragraph_format.keep_with_next = True
+            run(p, b[1], bold=True, size=8.5, color=NAVY)
             q = d.add_paragraph()
             q.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            q.paragraph_format.space_after = Pt(6)
-            q.add_run(_rot(b[1]) + " ").bold = True
-            x = q.add_run(b[2])
+            q.paragraph_format.space_after = Pt(4)
             if b[2] == NC:
-                x.italic = True
-        elif k == "par":
-            q = d.add_paragraph(b[1])
-            q.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            q.paragraph_format.space_after = Pt(6)
+                run(q, b[2], italic=True, size=10, color=GRAY)
+            else:
+                corpo(q, b[2])
+                if b[3]:
+                    run(q, f"  ({b[3]})", size=8.5, color=GRAY)
+        elif k == "tabela":
+            cab, rows, pct, al = b[1], b[2], b[3], b[4]
+            larg = [LARG * x / sum(pct) for x in pct]
+            t = tabela(larg)
+            r = nova_linha(t)
+            for i, h in enumerate(cab):
+                p = cel(r.cells[i], NAVY)
+                run(p, h, bold=True, size=9, color="FFFFFF")
+                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if al[i] == "r" else WD_ALIGN_PARAGRAPH.LEFT
+            for j, row in enumerate(rows):
+                tot = row[0] == "Total"
+                r = nova_linha(t)
+                for i, v in enumerate(row):
+                    p = cel(r.cells[i], LIGHT if (j % 2 == 1 and not tot) else None, top=(8, NAVY) if tot else None, bottom=(4, LINE))
+                    run(p, str(v), bold=tot, size=9.5)
+                    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT if al[i] == "r" else WD_ALIGN_PARAGRAPH.LEFT
+            espaco(6)
+        elif k == "cartoes":
+            n = len(b[1])
+            t = tabela([LARG / n] * n, 1)
+            for i, (rot, val, nota) in enumerate(b[1]):
+                c = t.rows[0].cells[i]
+                c.width = Cm(LARG / n)
+                p = cel(c, LIGHT, top=(18, ACCENT))
+                run(p, rot.upper(), bold=True, size=7.5, color=GRAY)
+                q = c.add_paragraph()
+                run(q, val, bold=True, size=15, color=NAVY)
+                q.paragraph_format.space_after = Pt(0)
+                run(c.add_paragraph(), nota, size=8, color=GRAY)
+            espaco(8)
+        elif k == "barras":
+            p = d.add_paragraph()
+            run(p, b[1].upper(), bold=True, size=8.5, color=NAVY)
+            p.paragraph_format.keep_with_next = True
+            total = sum(x[1] for x in b[2])
+            BAR = 7.4
+            t = tabela([5.2, BAR + 0.4, 4.4])
+            for rot, v, vs, extra in b[2]:
+                r = nova_linha(t)
+                run(cel(r.cells[0], None, bottom=(4, LINE)), rot, size=9, color=NAVY)
+                pb_ = cel(r.cells[1], None, bottom=(4, LINE))  # barra = parágrafo sombreado com recuo à direita proporcional
+                ratio = max(0.02, v / max(x[1] for x in b[2]))
+                pb_.paragraph_format.right_indent = Cm(BAR * (1 - ratio))
+                pb_.paragraph_format.space_before = pb_.paragraph_format.space_after = Pt(3)
+                pb_.paragraph_format.line_spacing = Pt(8)
+                sh = OxmlElement("w:shd")
+                sh.set(qn("w:val"), "clear")
+                sh.set(qn("w:color"), "auto")
+                sh.set(qn("w:fill"), ACCENT)
+                pb_._p.get_or_add_pPr().append(sh)
+                run(pb_, " ", size=4)
+                pv = cel(r.cells[2], None, bottom=(4, LINE))
+                pv.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                run(pv, f"{vs}", bold=True, size=9, color=NAVY)
+                run(pv, f"  {v / total * 100:.0f}%" + (f" · {extra}" if extra else ""), size=8, color=GRAY)
+            espaco(6)
+        elif k == "cronologia":
+            t = tabela([2.6, 14.4])
+            for data_, texto, origem in b[1]:
+                r = nova_linha(t)
+                run(cel(r.cells[0], None, bottom=(4, LINE)), data_, bold=True, size=9.5, color=ACCENT)
+                pv = cel(r.cells[1], None, bottom=(4, LINE))
+                corpo(pv, texto + ("." if not texto.endswith((".", ")")) else ""), size=10)
+                if origem and origem not in texto:
+                    run(pv, f" ({origem})", size=8.5, color=GRAY)
+            espaco(4)
         elif k == "nota":
             q = d.add_paragraph()
-            x = q.add_run(b[1])
-            x.italic, x.font.size = True, Pt(9)
-        elif k == "tabela":
-            t = d.add_table(rows=1, cols=len(b[1]))
-            t.style = "Table Grid"
-            t.alignment = WD_TABLE_ALIGNMENT.CENTER
-            for i, h in enumerate(b[1]):
-                t.rows[0].cells[i].text = ""
-                run = t.rows[0].cells[i].paragraphs[0].add_run(h)
-                run.bold, run.font.size = True, Pt(9.5)
-            for row in b[2]:
-                cells = t.add_row().cells
-                for i, v in enumerate(row):
-                    run = cells[i].paragraphs[0].add_run(str(v))
-                    run.font.size = Pt(9.5)
-                    run.bold = row[0] == "Total"
-            d.add_paragraph()
+            run(q, b[1], italic=True, size=8.5, color=GRAY)
     buf = io.BytesIO()
     d.save(buf)
     return buf.getvalue()
 
 
+# ---------------- PDF ----------------
 def gerar_pdf(rel: dict, numero: str) -> bytes:
     import html
 
     import pymupdf
 
     e = lambda x: html.escape(str(x))
-    h = []
+
+    def corpo(texto, size="10pt"):
+        return "".join(f'<span style="color:#{GRAY};font-size:8pt">{e(seg)}</span>' if orig else e(seg) for seg, orig in segmentos(texto))
+
+    def td(conteudo, estilo="", **attrs):
+        a = "".join(f' {k}="{v}"' for k, v in attrs.items())
+        return f'<td style="{estilo}"{a}>{conteudo}</td>'
+
+    h = ['<body style="font-family:sans-serif;font-size:10pt;color:#222222">']
     for b in blocos(rel, numero):
         k = b[0]
         if k == "titulo":
-            h.append(f'<h1 style="font-size:16pt;text-align:center;color:#0f1b2d">{e(b[1])}</h1>')
-        elif k == "sub":
-            h.append(f'<p style="text-align:center;color:#556577;font-size:9pt">{e(b[1])}</p>')
+            h.append(f'<table style="width:100%" cellspacing="0" cellpadding="10"><tr>{td(f"<span style=\"color:#ffffff;font-size:17pt\"><b>{e(b[1])}</b></span><br><span style=\"color:#{LINE};font-size:9pt\">{e(b[2])} &nbsp;·&nbsp; {e(b[3])}</span>", f"background-color:#{NAVY}")}</tr></table><p style="font-size:4pt">&nbsp;</p>')
+        elif k == "resumo":
+            h.append(f'<p style="color:#{ACCENT};font-size:8.5pt;margin-bottom:2pt"><b>RESUMO EXECUTIVO</b></p><table style="width:100%" cellspacing="0" cellpadding="4">')
+            for rot, val, tipo in b[1]:
+                if tipo == "nc":
+                    v = f'<i style="color:#{GRAY}">{e(val)}</i>'
+                elif tipo == "sn":
+                    v = f'<b style="color:#{NAVY if val == "SIM" else "3a3a3a"}">{e(val)}</b>'
+                else:
+                    v = corpo(val)
+                h.append(f'<tr>{td(f"<b>{e(rot)}</b>", f"width:29%;background-color:#{LIGHT};color:#{NAVY};font-size:8.5pt;border-bottom:1px solid #ffffff")}{td(v, f"width:71%;border-bottom:1px solid #{LINE}")}</tr>')
+            h.append('</table><p style="font-size:4pt">&nbsp;</p>')
+        elif k == "atencao":
+            itens = "".join(f'<p style="margin-top:2pt;margin-bottom:0">{corpo(i)}</p>' for i in b[1])
+            h.append(f'<table style="width:100%" cellspacing="0" cellpadding="7"><tr>{td(f"<b style=\"color:#8a5a00;font-size:8.5pt\">PONTOS DE ATENÇÃO</b>{itens}", f"background-color:#{AMBER_BG};border-left:3px solid #{AMBER}")}</tr></table><p style="font-size:4pt">&nbsp;</p>')
+        elif k == "timeline":
+            n = len(b[1])
+            cels = "".join(td(f'<b style="color:#{NAVY}">{e(dt)}</b><br><span style="color:#{GRAY};font-size:8pt">{e(rot)}</span>', f"width:{100 // n}%;text-align:center;border-top:3px solid #{ACCENT}") for dt, rot in b[1])
+            h.append(f'<table style="width:100%" cellspacing="2" cellpadding="4"><tr>{cels}</tr></table><p style="font-size:4pt">&nbsp;</p>')
         elif k == "secao":
-            h.append(f'<h2 style="font-size:11.5pt;color:#0f1b2d;margin-top:12pt;border-bottom:1px solid #1351b4">{e(b[1].upper())}</h2>')
+            h.append(f'<h2 style="font-size:11.5pt;color:#{NAVY};margin-top:12pt;margin-bottom:4pt;border-bottom:1px solid #{ACCENT}"><span style="color:#{ACCENT}">{b[1]}</span> &nbsp;{e(b[2].upper())}</h2>')
+        elif k == "ficha":
+            h.append('<table style="width:100%" cellspacing="0" cellpadding="4">')
+            for rot, val, origem in b[1]:
+                v = f'<i style="color:#{GRAY}">{e(val)}</i>' if val == NC else corpo(val) + (f' <span style="color:#{GRAY};font-size:8pt">({e(origem)})</span>' if origem else "")
+                h.append(f'<tr>{td(f"<b>{e(rot)}</b>", f"width:29%;color:#{NAVY};font-size:8pt;border-bottom:1px solid #{LINE}")}{td(v, f"width:71%;border-bottom:1px solid #{LINE}")}</tr>')
+            h.append('</table><p style="font-size:3pt">&nbsp;</p>')
         elif k == "rot":
-            txt = f"<i>{e(b[2])}</i>" if b[2] == NC else e(b[2])
-            h.append(f'<p style="text-align:justify;font-size:10.5pt"><b>{e(_rot(b[1]))}</b> {txt}</p>')
-        elif k == "par":
-            h.append(f'<p style="text-align:justify;font-size:10.5pt">{e(b[1])}</p>')
-        elif k == "nota":
-            h.append(f'<p style="font-size:8.5pt;color:#556577"><i>{e(b[1])}</i></p>')
+            v = f'<i style="color:#{GRAY}">{e(b[2])}</i>' if b[2] == NC else corpo(b[2]) + (f' <span style="color:#{GRAY};font-size:8pt">({e(b[3])})</span>' if b[3] else "")
+            h.append(f'<p style="margin-top:6pt;margin-bottom:0;color:#{NAVY};font-size:8pt"><b>{e(b[1])}</b></p><p style="text-align:justify;margin-top:1pt">{v}</p>')
         elif k == "tabela":
-            cab = "".join(f'<td style="width:{w}%;background-color:#eef2f7"><b style="font-size:8.5pt">{e(c)}</b></td>' for c, w in zip(b[1], b[3]))
-            rows = "".join("<tr>" + "".join(f'<td style="font-size:8.5pt">{"<b>" + e(v) + "</b>" if r[0] == "Total" else e(v)}</td>' for v in r) + "</tr>" for r in b[2])
-            h.append(f'<table style="width:100%" cellspacing="0" cellpadding="3"><tr>{cab}</tr>{rows}</table><p></p>')
+            cab, rows, pct, al = b[1], b[2], b[3], b[4]
+            ali = lambda i: "right" if al[i] == "r" else "left"
+            head = "".join(td(f'<b style="color:#ffffff;font-size:8.5pt">{e(c)}</b>', f"width:{p}%;background-color:#{NAVY};text-align:{ali(i)}") for i, (c, p) in enumerate(zip(cab, pct)))
+            body = ""
+            for j, row in enumerate(rows):
+                tot = row[0] == "Total"
+                fundo = f"background-color:#{LIGHT};" if (j % 2 == 1 and not tot) else ""
+                body += "<tr>" + "".join(td(("<b>" + e(v) + "</b>") if tot else e(v), f"{fundo}font-size:9pt;text-align:{ali(i)};border-bottom:1px solid #{LINE}" + (f";border-top:1px solid #{NAVY}" if tot else "")) for i, v in enumerate(row)) + "</tr>"
+            h.append(f'<table style="width:100%" cellspacing="0" cellpadding="4"><tr>{head}</tr>{body}</table><p style="font-size:4pt">&nbsp;</p>')
+        elif k == "cartoes":
+            n = len(b[1])
+            cels = "".join(td(f'<span style="color:#{GRAY};font-size:7pt"><b>{e(r.upper())}</b></span><br><span style="color:#{NAVY};font-size:14pt"><b>{e(v)}</b></span><br><span style="color:#{GRAY};font-size:7.5pt">{e(nt)}</span>', f"width:{100 // n}%;background-color:#{LIGHT};border-top:3px solid #{ACCENT}") for r, v, nt in b[1])
+            h.append(f'<table style="width:100%" cellspacing="4" cellpadding="6"><tr>{cels}</tr></table><p style="font-size:4pt">&nbsp;</p>')
+        elif k == "barras":
+            total, maior = sum(x[1] for x in b[2]), max(x[1] for x in b[2])
+            h.append(f'<p style="color:#{NAVY};font-size:8pt;margin-bottom:2pt"><b>{e(b[1].upper())}</b></p><table style="width:100%" cellspacing="0" cellpadding="3">')
+            for rot, v, vs, extra in b[2]:
+                w = max(1.0, round(v / maior * 100, 1))
+                barra = f'<table style="width:100%" cellspacing="0" cellpadding="0"><tr>{td("&nbsp;", f"width:{w}%;background-color:#{ACCENT};font-size:6pt")}{td("&nbsp;", f"background-color:#{LIGHT};font-size:6pt")}</tr></table>' if w < 100 else \
+                        f'<table style="width:100%" cellspacing="0" cellpadding="0"><tr>{td("&nbsp;", f"background-color:#{ACCENT};font-size:6pt")}</tr></table>'
+                h.append(f'<tr>{td(e(rot), f"width:30%;font-size:8.5pt;color:#{NAVY}")}{td(barra, "width:42%")}{td(f"<b style=\"color:#{NAVY}\">{e(vs)}</b><br><span style=\"color:#{GRAY};font-size:7.5pt\">{v / total * 100:.0f}%" + (f" · {e(extra)}" if extra else "") + "</span>", "width:28%;text-align:right;font-size:9pt")}</tr>')
+            h.append('</table><p style="font-size:4pt">&nbsp;</p>')
+        elif k == "cronologia":
+            h.append('<table style="width:100%" cellspacing="0" cellpadding="4">')
+            for data_, texto, origem in b[1]:
+                v = corpo(texto + ("." if not texto.endswith((".", ")")) else "")) + (f' <span style="color:#{GRAY};font-size:8pt">({e(origem)})</span>' if origem and origem not in texto else "")
+                h.append(f'<tr>{td(f"<b>{e(data_)}</b>", f"width:15%;color:#{ACCENT};border-bottom:1px solid #{LINE}")}{td(v, f"width:85%;border-bottom:1px solid #{LINE}")}</tr>')
+            h.append('</table>')
+        elif k == "nota":
+            h.append(f'<p style="font-size:8pt;color:#{GRAY}"><i>{e(b[1])}</i></p>')
+    h.append("</body>")
     story = pymupdf.Story(html="".join(h), em=10)
     buf = io.BytesIO()
     w = pymupdf.DocumentWriter(buf)
     folha = pymupdf.paper_rect("a4")
-    mais, n = 1, 0
+    mais = 1
     while mais:
         dev = w.begin_page(folha)
-        mais, _ = story.place(folha + (56, 50, -56, -56))
+        mais, _ = story.place(folha + (54, 62, -54, -58))
         story.draw(dev)
         w.end_page()
-        n += 1
     w.close()
     doc = pymupdf.open(stream=buf.getvalue())
-    for i, pg in enumerate(doc):  # rodapé com o número e a página
-        pg.insert_text((56, 820), f"Recuperação Judicial nº {numero}", fontsize=7.5, color=(0.35, 0.4, 0.47))
-        pg.insert_text((500, 820), f"página {i + 1} de {len(doc)}", fontsize=7.5, color=(0.35, 0.4, 0.47))
+    cinza = (0.36, 0.42, 0.49)
+    for i, pg in enumerate(doc):  # cabeçalho discreto e rodapé com a página
+        pg.insert_text((54, 36), f"Recuperação Judicial · Processo nº {numero}", fontsize=7.5, color=cinza)
+        pg.draw_line((54, 41), (541, 41), color=(0.79, 0.83, 0.88), width=0.5)
+        pg.insert_text((488, 822), f"página {i + 1} de {len(doc)}", fontsize=7.5, color=cinza)
     return doc.tobytes()
