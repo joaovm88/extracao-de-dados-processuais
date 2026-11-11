@@ -56,6 +56,11 @@ class ItensIn(BaseModel):
     valores: Optional[dict] = None  # só para "editar" (um índice)
 
 
+class LoteDocsIn(BaseModel):
+    ids: list[str]
+    acao: str  # "excluir" | "reprocessar"
+
+
 class RjIn(BaseModel):
     relatorio: dict
     reviewed: bool = False
@@ -717,12 +722,48 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         if not d:
             raise HTTPException(404, "Documento não encontrado.")
         _remove_doc(d)
-        if d["case_id"]:
-            if d["numero_processo"] and db.get_process(d["case_id"], d["numero_processo"]):
-                db.update_process(d["case_id"], d["numero_processo"], error=None)  # o erro era deste material: sai junto com o PDF
-                db.mark_stale(d["case_id"], d["numero_processo"])
-            queue.enqueue(f"{READY_PREFIX}{d['case_id']}")
+        _apos_excluir([d])
         return {"status": "deleted"}
+
+    def _apos_excluir(docs: list[dict]) -> None:
+        """Depois de excluir PDFs: cada processo afetado é reextraído UMA vez, e só se perdeu um PDF que já tinha sido lido
+        (PDF que deu erro ou estava na fila nunca entrou na extração: tirá-lo não muda o resultado nem gasta IA)."""
+        afetados, casos = {}, set()
+        for d in docs:
+            if not d.get("case_id"):
+                continue
+            casos.add(d["case_id"])
+            if d.get("numero_processo"):
+                chave = (d["case_id"], d["numero_processo"])
+                afetados[chave] = afetados.get(chave, False) or d["status"] == "done"
+        for (cid, numero), lido in afetados.items():
+            p = db.get_process(cid, numero)
+            if not p:
+                continue
+            if lido:
+                db.update_process(cid, numero, error=None)  # o erro era deste material: sai junto com o PDF
+                db.mark_stale(cid, numero)
+            elif p.get("stale") == 1 or (p.get("error") and not p.get("result")):
+                db.update_process(cid, numero, error=None)  # destrava quem esperava por esse PDF
+                db.mark_stale(cid, numero)
+        for cid in casos:
+            queue.enqueue(f"{READY_PREFIX}{cid}")
+
+    @app.post("/api/documents/lote")
+    def docs_lote(body: LoteDocsIn):
+        """Exclui ou reprocessa vários PDFs de uma vez (ex.: todos os que deram erro)."""
+        if body.acao not in ("excluir", "reprocessar"):
+            raise HTTPException(400, "Use a ação 'excluir' ou 'reprocessar'.")
+        docs = [d for d in (db.get(i) for i in dict.fromkeys(body.ids)) if d]
+        if body.acao == "excluir":
+            for d in docs:
+                _remove_doc(d)
+            _apos_excluir(docs)
+        else:
+            for d in docs:
+                db.update(d["id"], status="queued", error=None, pages_done=0, pages_ocr=0)
+                queue.enqueue(d["id"])
+        return {"acao": body.acao, "feitos": len(docs), "nao_encontrados": len(set(body.ids)) - len(docs)}
 
     @app.get("/api/documents")
     def list_docs(case_id: Optional[str] = None):

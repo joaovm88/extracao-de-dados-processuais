@@ -161,3 +161,7 @@ Ao enviar os PDFs de uma RJ, escolha o tipo **Recuperação Judicial**. O proces
 - **Cálculos pelo código:** deságio ponderado geral (valor de cada classe no QGC × deságio de cada classe) com a memória de cálculo, totais de bens e conferência das somas do QGC. A IA só extrai os números.
 - **Revisão:** *📄 Abrir relatório* mostra todos os campos para editar (valor e origem), com as tabelas de empresas, classes, bens, QGC e a cronologia; campos sem informação saem como "Não consta nos documentos analisados".
 - **Entrega:** *⬇ Word* (.docx) e *⬇ PDF*, gerados do mesmo conteúdo. Sugestão de envio: inicial, decisão de deferimento, plano e aditivos, laudos, ata da assembleia, homologação e relatórios da administração judicial.
+
+## PDFs em lote: excluir e reprocessar
+
+Na janela **📎 PDFs**: caixas de seleção por arquivo, *Selecionar os com erro*, *Excluir selecionados* e *Reprocessar selecionados*. Excluir PDFs que deram erro (nunca foram lidos) não refaz nenhuma extração; excluir um PDF já lido reextrai o processo uma única vez. Os erros de leitura aparecem em linguagem simples (arquivo corrompido, com senha etc.), com o detalhe técnico ao passar o mouse.

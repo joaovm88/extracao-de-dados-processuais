@@ -126,8 +126,11 @@
 
 <dialog id="dlg-docs" class="wide"><form method="dialog" class="dlg">
   <header><h2>PDFs enviados</h2><button class="icon-btn" value="x" aria-label="Fechar">✕</button></header>
-  <div class="dlg-body"><div class="scroll"><table class="plain" id="docs"><thead><tr><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div></div>
-  <footer><span class="spacer"></span><button class="btn" value="x">Fechar</button></footer>
+  <div class="dlg-body">
+    <div class="filters" style="padding:0 0 8px"><span class="muted" id="docs-sum"></span><span class="spacer"></span>
+      <button type="button" class="btn sm" id="docs-sel-err">Selecionar os com erro</button><button type="button" class="btn sm" id="docs-sel-none">Limpar seleção</button></div>
+    <div class="scroll" style="max-height:56vh"><table class="plain" id="docs"><thead><tr><th><input type="checkbox" id="docs-all" aria-label="Selecionar todos"></th><th>Arquivo</th><th>Situação</th><th>Páginas</th><th>Detalhe</th><th></th></tr></thead><tbody></tbody></table></div></div>
+  <footer><span class="muted" id="docs-count"></span><span class="spacer"></span><button class="btn" id="docs-retry" type="button" disabled>Reprocessar selecionados</button><button class="btn danger-btn" id="docs-del" type="button" disabled>🗑 Excluir selecionados</button><button class="btn" value="x">Fechar</button></footer>
 </form></dialog>
 
 <dialog id="dlg-med" class="wide"><form method="dialog" class="dlg">

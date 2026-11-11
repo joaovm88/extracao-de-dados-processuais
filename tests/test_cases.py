@@ -1398,3 +1398,37 @@ def test_rj_end_to_end_report_edit_downloads_and_stays_out_of_the_spreadsheet(en
     make_pdf(tmp / "b.pdf")
     c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "b.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid2})
     assert c.get(f"/api/cases/{cid2}/processes/{NUM}/rj").status_code == 404
+
+
+def test_batch_delete_and_retry_pdfs_only_reextracts_when_a_read_pdf_is_removed(env):
+    c, llm, tmp = env
+    cid, d_ok = _caso_com_pdf(c, tmp, "Lote")
+    # dois PDFs com erro (arquivo que não é PDF de verdade), do mesmo processo
+    ruins = [c.post("/api/documents", files={"file": (f"{NUM}_PARTE_{i}.pdf", b"%%PDF-1.4\nisto nao e um pdf de verdade %d" % i, "application/pdf")}, data={"case_id": cid}).json()["id"] for i in (2, 3)]
+    for i in ruins:
+        for _ in range(100):
+            if c.get(f"/api/documents/{i}").json()["status"] in ("error", "done"):
+                break
+            time.sleep(0.05)
+        assert c.get(f"/api/documents/{i}").json()["status"] == "error"
+    n = len(llm.calls)
+    r = c.post("/api/documents/lote", json={"ids": ruins + ["nao-existe"], "acao": "excluir"}).json()
+    assert r == {"acao": "excluir", "feitos": 2, "nao_encontrados": 1}
+    assert [x["id"] for x in c.get(f"/api/documents?case_id={cid}").json()] == [d_ok["id"]]
+    time.sleep(0.5)
+    p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+    assert len(llm.calls) == n and p["result"] and p["stale"] == 0  # tirar PDF que nunca foi lido não refaz a extração
+    # reprocessar em lote
+    assert c.post("/api/documents/lote", json={"ids": [d_ok["id"]], "acao": "reprocessar"}).json()["feitos"] == 1
+    wait(c, d_ok["id"])
+    # excluir o PDF lido: aí sim o processo é atualizado (sem PDFs, fica sem erro)
+    assert c.post("/api/documents/lote", json={"ids": [d_ok["id"]], "acao": "excluir"}).json()["feitos"] == 1
+    assert c.get(f"/api/documents?case_id={cid}").json() == []
+    assert c.post("/api/documents/lote", json={"ids": [], "acao": "apagar"}).status_code == 400
+
+
+def test_pdf_read_error_is_explained_without_internal_paths():
+    from app.worker import explain_pdf_error
+    m = explain_pdf_error(RuntimeError("Failed to open file '/data/uploads/abc123.pdf' as type pdf."))
+    assert m.startswith("Não foi possível abrir este PDF") and "/data/uploads" not in m and "'abc123.pdf'" in m
+    assert "senha" in explain_pdf_error(ValueError("document is encrypted, password required"))

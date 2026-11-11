@@ -770,18 +770,46 @@ $('tpl-btn').onclick = async () => {
   catch (e) { $('tpl-msg').className = 'msg err'; $('tpl-msg').textContent = e.message; }
 };
 $('tpl-del').onclick = async () => { showTemplate(await api(`/api/cases/${caseId}/template`, {method: 'DELETE'})); $('tpl-msg').textContent = 'Modelo removido: será usado o layout padrão.'; refresh(true); };
-function openDocs() { renderDocs(); $('dlg-docs').showModal(); }
+let docsSel = new Set();
+function openDocs() { docsSel = new Set(); renderDocs(); $('dlg-docs').showModal(); }
 $('btn-docs').onclick = openDocs;
 function renderDocs() {
   if (!data) return;
-  $('docs').tBodies[0].innerHTML = data.documentos.map(d => { const [dc, dt] = DST[d.status] || ['', d.status];
-    return `<tr><td>${esc(d.filename)}</td><td><span class="tag ${dc}">${dt}</span></td><td>${d.pages_done}/${d.pages_total}${d.pages_ocr ? ` <span class="muted">(${d.pages_ocr} OCR)</span>` : ''}</td>
-      <td>${esc(d.error || (d.numero_processo ? 'Processo ' + d.numero_processo : 'nº do processo não identificado'))}</td>
+  const D = data.documentos; docsSel = new Set([...docsSel].filter(id => D.some(d => d.id === id)));  // some o que já foi excluído
+  const n = st => D.filter(d => d.status === st).length;
+  $('docs-sum').innerHTML = `<b>${D.length}</b> PDF(s) · ${n('done')} lido(s) · ${n('queued') + n('processing')} em andamento · <b>${n('error')}</b> com erro`;
+  $('docs').tBodies[0].innerHTML = D.map(d => { const [dc, dt] = DST[d.status] || ['', d.status];
+    return `<tr class="${d.status === 'error' ? 'bad' : ''}"><td><input type="checkbox" data-doc="${d.id}" ${docsSel.has(d.id) ? 'checked' : ''} aria-label="Selecionar ${esc(d.filename)}"></td><td>${esc(d.filename)}</td><td><span class="tag ${dc}">${dt}</span></td><td>${d.pages_done}/${d.pages_total}${d.pages_ocr ? ` <span class="muted">(${d.pages_ocr} OCR)</span>` : ''}</td>
+      <td${d.error ? ` title="${esc(d.error)}"` : ''}>${esc(d.error ? String(d.error).split(' Detalhe técnico: ')[0] : (d.numero_processo ? 'Processo ' + d.numero_processo : 'nº do processo não identificado'))}</td>
       <td>${['error', 'processing', 'queued'].includes(d.status) ? `<button type="button" class="btn sm" data-retry="${d.id}">Reprocessar</button> ` : ''}<button type="button" class="btn sm danger-ghost" data-del="${d.id}">Excluir</button></td></tr>`; }).join('')
-    || '<tr><td colspan="5" class="muted">Nenhum PDF enviado.</td></tr>';
+    || '<tr><td colspan="6" class="muted">Nenhum PDF enviado.</td></tr>';
   $('docs').querySelectorAll('[data-del]').forEach(b => b.onclick = async () => { await delDoc(b.dataset.del); renderDocs(); });
   $('docs').querySelectorAll('[data-retry]').forEach(b => b.onclick = async () => { await retryDoc(b.dataset.retry); renderDocs(); });
+  $('docs-sel-err').disabled = !n('error'); docsBar();
 }
+function docsBar() {
+  const k = docsSel.size, D = data.documentos;
+  $('docs-count').textContent = k ? `${k} selecionado(s)` : ''; $('docs-del').disabled = $('docs-retry').disabled = !k;
+  $('docs-del').textContent = k ? `🗑 Excluir ${k} selecionado(s)` : '🗑 Excluir selecionados';
+  $('docs-all').checked = !!D.length && k === D.length; $('docs-all').indeterminate = k > 0 && k < D.length;
+}
+$('docs').addEventListener('change', e => {
+  if (e.target.id === 'docs-all') { docsSel = new Set(e.target.checked ? data.documentos.map(d => d.id) : []); return renderDocs(); }
+  if (e.target.matches('[data-doc]')) { e.target.checked ? docsSel.add(e.target.dataset.doc) : docsSel.delete(e.target.dataset.doc); docsBar(); }
+});
+$('docs-sel-err').onclick = () => { docsSel = new Set(data.documentos.filter(d => d.status === 'error').map(d => d.id)); renderDocs(); };
+$('docs-sel-none').onclick = () => { docsSel = new Set(); renderDocs(); };
+async function docsLote(acao) {
+  const ids = [...docsSel]; if (!ids.length) return;
+  const sel = data.documentos.filter(d => docsSel.has(d.id)), lidos = sel.filter(d => d.status === 'done').length;
+  if (acao === 'excluir' && !confirm(`Excluir ${ids.length} PDF(s)?${lidos ? `\n\n${lidos} deles já foram lidos: os processos correspondentes serão reextraídos sem esses arquivos.` : '\n\nNenhum deles foi lido com sucesso, então nenhuma extração muda.'}\nNão tem volta.`)) return;
+  try {
+    const r = await api('/api/documents/lote', json('POST', {ids, acao}));
+    toast(acao === 'excluir' ? `${r.feitos} PDF(s) excluído(s)` : `${r.feitos} PDF(s) reenviado(s) para a fila`, 'ok'); docsSel = new Set(); await refresh(true); renderDocs();
+  } catch (e) { toast(e.message, 'err'); }
+}
+$('docs-del').onclick = () => docsLote('excluir');
+$('docs-retry').onclick = () => docsLote('reprocessar');
 
 /* ---------- tema claro/escuro ---------- */
 function applyTheme(t) { document.documentElement.dataset.theme = t; store.set('tema', t); $('theme').textContent = t === 'dark' ? '☀' : '🌙'; $('theme').title = t === 'dark' ? 'Mudar para tema claro' : 'Mudar para tema escuro'; }

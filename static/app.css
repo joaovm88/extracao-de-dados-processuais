@@ -203,3 +203,4 @@ dialog.xwide{width:min(1100px,96vw)}
 .rj-resumo .kpis{margin-bottom:8px}
 @media (max-width:800px){.rj-f{grid-template-columns:1fr}}
 .rj-ta{min-height:64px}
+#docs td{overflow-wrap:anywhere}#docs td:last-child{white-space:nowrap}

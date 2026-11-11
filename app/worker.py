@@ -49,6 +49,25 @@ def explain_llm_error(e: Exception) -> str:
     return f"{dica} Detalhe técnico: {raw[:400]}"
 
 
+def explain_pdf_error(e: Exception) -> str:
+    """Falha ao ler um PDF, em linguagem do analista (o detalhe técnico vai junto, sem o caminho interno do arquivo)."""
+    import re as _re
+
+    raw = _re.sub(r"'[^']*[/\\]([^'/\\]+)'", r"'\1'", f"{type(e).__name__}: {e}")[:300]
+    low = raw.lower()
+    if "failed to open" in low or "cannot open" in low or "no objects found" in low or "broken" in low or "format error" in low:
+        dica = "Não foi possível abrir este PDF: o arquivo está corrompido ou incompleto (download interrompido). Baixe-o de novo no sistema do tribunal e reenvie."
+    elif "password" in low or "encrypt" in low or "senha" in low:
+        dica = "Este PDF está protegido por senha. Gere uma cópia sem senha e reenvie."
+    elif "tesseract" in low:
+        dica = "O OCR (Tesseract) não está disponível para ler este PDF digitalizado. Confira a instalação do Tesseract."
+    elif "memory" in low:
+        dica = "Faltou memória para ler este PDF. Tente dividi-lo em partes menores."
+    else:
+        dica = "Não foi possível ler este PDF. Tente “Reprocessar”; se repetir, baixe o arquivo de novo e reenvie."
+    return f"{dica} Detalhe técnico: {raw}"
+
+
 def pages_path(settings: Settings, doc_id: str):
     d = settings.data_dir / "pages"
     d.mkdir(parents=True, exist_ok=True)
@@ -155,7 +174,7 @@ def process_document(doc_id: str, settings: Settings, db: MetadataDB, store: Sea
             db.mark_stale(doc["case_id"], numero)
     except Exception as e:  # noqa: BLE001
         log.exception("falha ao processar %s", doc_id)
-        db.update(doc_id, status="error", error=str(e), finished_at=time.time(), started_at=doc.get("started_at") or t_wall)
+        db.update(doc_id, status="error", error=explain_pdf_error(e), finished_at=time.time(), started_at=doc.get("started_at") or t_wall)
     finally:
         extract_ready(doc["case_id"], settings, db, store, llm_client)
 
