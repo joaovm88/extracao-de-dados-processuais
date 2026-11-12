@@ -1,5 +1,6 @@
 """Leitura de PDFs: texto nato-digital quando existe, OCR quando a página é imagem."""
 import io
+import time
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -14,11 +15,29 @@ class PageResult:
     number: int  # 1-based
     text: str
     method: str  # "text" | "ocr" | "ocr_unavailable" | "empty" | "text_degraded"
+    seconds: float = 0.0  # tempo gasto para ler a página (texto ou OCR)
+
+
+def _configure_tesseract() -> None:
+    """No Windows o Tesseract costuma não estar no PATH: usa TESSERACT_CMD ou o local padrão do instalador."""
+    import os
+    import pytesseract
+
+    cmd = os.environ.get("TESSERACT_CMD", "")
+    if not cmd:
+        for cand in (r"C:\Program Files\Tesseract-OCR\tesseract.exe", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"):
+            if os.path.exists(cand):
+                cmd = cand
+                break
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
 
 
 def ocr_available() -> bool:
     try:
         import pytesseract
+
+        _configure_tesseract()
 
         pytesseract.get_tesseract_version()
         return True
@@ -30,13 +49,23 @@ def _ocr_page(page: "fitz.Page", settings: Settings) -> str:
     import pytesseract
     from PIL import Image
 
+    _configure_tesseract()
+
     pix = page.get_pixmap(dpi=settings.ocr_dpi)
     img = Image.open(io.BytesIO(pix.tobytes("png")))
     return pytesseract.image_to_string(img, lang=settings.ocr_lang)
 
 
 def iter_pages(path: str, settings: Settings) -> Iterator[PageResult]:
-    """Gera uma página por vez (não carrega milhares de páginas em memória)."""
+    """Gera uma página por vez (não carrega milhares de páginas em memória), medindo o tempo de cada uma."""
+    last = time.perf_counter()
+    for pr in _iter_pages_raw(path, settings):
+        pr.seconds = time.perf_counter() - last  # só o trabalho de leitura/OCR; o tempo do consumidor fica de fora
+        yield pr
+        last = time.perf_counter()
+
+
+def _iter_pages_raw(path: str, settings: Settings) -> Iterator[PageResult]:
     has_ocr = ocr_available()
     with fitz.open(path) as doc:
         for i, page in enumerate(doc, start=1):

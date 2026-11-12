@@ -13,7 +13,7 @@ from typing import Optional
 from openpyxl import load_workbook
 from openpyxl.styles import PatternFill
 
-from .schemas import SHEETS, classify
+from .schemas import EXTRA_COLS, SHEETS, is_rj, normalize_fields, classify, itens_autorizados, manual_text, situacao_analise
 
 PENDING = PatternFill("solid", fgColor="FFF3CD")  # linhas ainda não revisadas
 
@@ -64,6 +64,7 @@ def _header_map(kind: str) -> dict[str, str]:
         return {norm(h): k for h, k in FRAUDE_KEYS.items()}
     m = dict(_MCFLY_SYN)
     m.update({norm(f.header): f.key for f in SHEETS[kind].fields})
+    m.update(EXTRA_COLS)  # colunas opcionais: nº de ordem e situação da análise (feito manualmente / revisado)
     return m
 
 
@@ -73,7 +74,9 @@ def _match(header, hmap: dict[str, str]) -> Optional[str]:
         return None
     if h in hmap:
         return hmap[h]
-    for known, key in hmap.items():  # cabeçalhos longos com complemento ("... (Se sim preencher a próxima coluna)")
+    for known, key in hmap.items():
+        if key in ("ordem", "situacao_analise"):
+            continue  # opcionais: só por cabeçalho exato  # cabeçalhos longos com complemento ("... (Se sim preencher a próxima coluna)")
         if len(known) >= 12 and (h.startswith(known) or known.startswith(h)):
             return key
     return None
@@ -107,7 +110,8 @@ def _last_data_row(ws, header_row: int) -> int:
 def analyze(data: bytes) -> dict:
     """Quais abas e colunas serão preenchidas e o que não foi reconhecido (para avisar na tela)."""
     wb = load_workbook(io.BytesIO(data))
-    out = {"abas": [], "ignoradas": [], "ausentes": []}
+    out = {"abas": [], "ignoradas": [], "ausentes": [], "dicas": []}
+    extras: set = set()
     kinds = {sheet_kind(ws.title) for ws in wb.worksheets}
     nomes = {"execucoes_fiscais": "Execuções Fiscais", "outras_acoes": "Outras Ações", "embargos": "Embargos à Execução",
              "bens": "Outros Bens", "fraude": "Alegações de Fraude"}
@@ -126,6 +130,12 @@ def analyze(data: bytes) -> dict:
         row, cols, unknown = found
         out["abas"].append({"aba": ws.title, "preenchida": True, "linha_cabecalho": row,
                             "reconhecidas": [str(ws.cell(row, c).value).strip() for c in cols], "nao_reconhecidas": unknown})
+        if kind in SHEETS:
+            extras.update(cols.values())
+    faltam = [n for k, n in (("ordem", "Nº"), ("situacao_analise", "Situação da análise")) if k not in extras]
+    if faltam and any(a["preenchida"] for a in out["abas"]):
+        out["dicas"] = [f"Colunas opcionais que o modelo não tem: {', '.join(faltam)}. Se você criar uma coluna com esse título nas abas de "
+                        "processos, o sistema preenche o nº de ordem e a marcação “Feito manualmente / Revisado”."]
     return out
 
 
@@ -137,12 +147,36 @@ def _values(kind: str, proc: dict) -> dict:
     if not vals.get("classe") and proc.get("classe"):
         vals["classe"] = proc["classe"]
     if kind in SHEETS:
-        fields = res["fields"] if res else {"digitalizado": "NÃO"}
+        vals["situacao_analise"] = situacao_analise(proc)
+        if proc.get("manual"):  # feito à mão: só a marcação vai para a planilha (nenhum valor da IA)
+            vals["observacoes"] = manual_text(proc)
+            if proc.get("digitalizado"):
+                vals["digitalizado"] = proc["digitalizado"]
+            return vals
+        fields = normalize_fields(SHEETS[kind], res["fields"]) if res else {"digitalizado": "NÃO"}
         vals.update({k: v for k, v in fields.items() if v not in (None, "")})
+        if proc.get("digitalizado"):  # escolha do analista (NÃO = processo físico)
+            vals["digitalizado"] = proc["digitalizado"]
+    return vals
+
+
+def item_row(kind: str, proc: dict, item: dict, anterior: Optional[dict] = None) -> dict:
+    """Linha de 'Outros Bens' ou 'Alegações de Fraude' a partir de um item autorizado. Em bens, matrícula, características e
+    proprietário aparecem só na primeira linha de cada matrícula (como na planilha do analista)."""
+    vals = {k: v for k, v in item.items() if not k.startswith("_") and k not in ("citacao",)}
+    m = proc.get("mcfly") or {}
+    if kind == "fraude":
+        vals.pop("resumo", None)
+        vals.update(numero=proc["numero"], classe=m.get("classe") or proc.get("classe"))
+        vals["valor_causa"] = vals.get("valor_causa") or m.get("valor_causa")
+    elif anterior is not None and norm(anterior.get("matricula")) == norm(item.get("matricula")) and item.get("matricula"):
+        for k in ("matricula", "caracteristicas", "proprietario"):
+            vals.pop(k, None)
     return vals
 
 
 def fill(data: bytes, processes: list[dict]) -> bytes:
+    processes = [p for p in processes if not p.get("hidden") and not is_rj(p)]  # ocultos e processos de RJ (relatório próprio) não entram na planilha
     wb = load_workbook(io.BytesIO(data))
     for ws in wb.worksheets:
         kind = sheet_kind(ws.title)
@@ -163,19 +197,17 @@ def fill(data: bytes, processes: list[dict]) -> bytes:
                 if v in (None, "") or (only_empty and cell.value not in (None, "")):
                     continue
                 cell.value = v
-                if pend:
+                if pend and key not in ("ordem", "situacao_analise"):
                     cell.fill = PENDING
 
         if kind in ("bens", "fraude"):  # um item por linha, sempre acrescentado
             for p in processes:
-                res = p.get("result") or {}
-                pend = not p.get("reviewed")
-                for item in res.get("bens" if kind == "bens" else "fraudes", []):
+                anterior = None
+                for item in itens_autorizados(p, "bens" if kind == "bens" else "fraudes"):  # só o que o analista autorizou
                     last += 1
-                    vals = dict(item)
-                    if kind == "fraude":
-                        vals.update(numero=p["numero"], classe=(p.get("mcfly") or {}).get("classe") or p.get("classe"))
-                    write(last, vals, pend, only_empty=False)
+                    vals = item_row(kind, p, item, anterior)
+                    anterior = item
+                    write(last, vals, False, only_empty=False)
             continue
 
         num_col = by_key.get("numero")
@@ -191,12 +223,14 @@ def fill(data: bytes, processes: list[dict]) -> bytes:
             if kind not in ("relatorio",) and sk != kind:
                 continue  # o processo pertence a outra aba (EF, embargos ou outras ações)
             vals = _values(kind, p)
-            pend = bool(res) and not p.get("reviewed")
+            pend = bool(res) and not p.get("reviewed") and not p.get("manual")
             row = existing.get(_digits(p["numero"]))
             if row:
+                vals["ordem"] = row - hrow
                 write(row, vals, pend, only_empty=True)  # só células vazias: nada digitado é sobrescrito
             else:
                 last += 1
+                vals["ordem"] = last - hrow
                 write(last, vals, pend, only_empty=False)
                 existing[_digits(p["numero"])] = last
     buf = io.BytesIO()

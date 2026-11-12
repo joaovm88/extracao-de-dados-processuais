@@ -19,6 +19,8 @@ NUM = "0341609-70.2005.8.13.0261"
 class FakeLLM:
     """Provedor falso: devolve o payload e registra as chamadas."""
     name = "fake"
+    last_usage = {"entrada": 1000, "saida": 50, "raciocinio": None}
+    last_call = {"tentativas": 1, "espera_s": 0.0, "modelo": "fake"}
 
     def __init__(self, payload):
         self.payload, self.calls = payload, []
@@ -136,7 +138,7 @@ def test_case_flow_end_to_end(env):
     c, llm, tmp = env
     case = c.post("/api/cases", json={"nome": "Alfa"}).json()
     r = c.post(f"/api/cases/{case['id']}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx())})
-    assert r.json() == {"importados": 2}
+    assert r.json() == {"importados": 2, "novos": 2, "atualizados": 0}
 
     pdf = tmp / f"{NUM}_V001_001-151-180.pdf"
     make_pdf(pdf, image_page=False)
@@ -149,7 +151,7 @@ def test_case_flow_end_to_end(env):
     assert d["result"]["fields"]["garantia"] == "IMÓVEL" and d["result"]["modo"] == "llm"
     # páginas absolutas e rótulo no contexto enviado ao LLM
     assert "[VOL 001, pg. 152]" in llm.calls[0]["user"]
-    assert "Evento [Número], VOL [Número]" in llm.calls[0]["system"]
+    assert "[ORIGEM] - [dd/mm/aaaa]" in llm.calls[0]["system"]
     assert d["result"]["provedor"] == "fake" and d["result"]["citacoes"] == {"garantia": "VOL 001, pg. 2"}
 
     # revisão: lista fechada é imposta
@@ -173,8 +175,15 @@ def test_case_flow_end_to_end(env):
     # processo do Mcfly sem PDF entra como não digitalizado, na aba da sua classe
     oa = [[c_.value for c_ in r] for r in wb["Outras Ações"].iter_rows()]
     assert oa[1][0] == "0000001-00.2020.4.01.0000" and oa[1][6] == "NÃO"
-    assert wb["Outros Bens"].cell(2, 1).value == "28.749"
+    assert wb["Outros Bens"].cell(2, 1).value is None  # o bem é só uma SUGESTÃO da IA: não vai à planilha sem autorização
+    assert hdr[-2:] == ["Nº de ordem", "Situação da análise"] and ef[1][-2:] == [1, "Revisado"]
     assert wb["Relatório"].max_row == 3
+    # o analista autoriza -> a aba Outros Bens é preenchida
+    sheet = c.get(f"/api/cases/{case['id']}/sheet").json()
+    assert sheet["bens"][0]["_st"] == "sugerido" and next(a for a in sheet["abas"] if a["key"] == "bens")["pendentes"] == 1
+    assert c.put(f"/api/cases/{case['id']}/processes/{NUM}/itens", json={"lista": "bens", "acao": "autorizar"}).json()["alterados"] == 1
+    wb2 = load_workbook(io.BytesIO(c.get(f"/api/cases/{case['id']}/spreadsheet").content))
+    assert wb2["Outros Bens"].cell(2, 1).value == "28.749"
 
 
 def test_without_llm_key_is_flagged(tmp_path, monkeypatch):
@@ -243,7 +252,7 @@ def test_gemini_provider_structured_output_and_schema_fallback():
             generate_content=lambda **k: SimpleNamespace(text="não é json")))).extract("s", "u", schema)
 
 
-def test_anthropic_provider_uses_forced_tool():
+def test_anthropic_provider_calls_tool_with_auto_choice_and_effort_only_on_5x():
     from app.llm import AnthropicProvider
 
     seen = {}
@@ -252,8 +261,12 @@ def test_anthropic_provider_uses_forced_tool():
         seen.update(kw)
         return SimpleNamespace(content=[SimpleNamespace(type="tool_use", input={"observacoes": "x"})])
 
-    out = AnthropicProvider("k", "m", SimpleNamespace(messages=SimpleNamespace(create=create))).extract("s", "u", {"type": "object", "properties": {}})
-    assert out == {"observacoes": "x"} and seen["tool_choice"]["name"] == "registrar_extracao"
+    cli = SimpleNamespace(messages=SimpleNamespace(create=create))
+    out = AnthropicProvider("k", "m", cli, effort="low").extract("s", "u", {"type": "object", "properties": {}})
+    assert out == {"observacoes": "x"} and seen["tool_choice"] == {"type": "auto"}  # modelos 5.x recusam tool_choice forçado
+    assert "registrar_extracao" in seen["system"] and "output_config" not in seen  # modelo sem '-5': sem esforço
+    AnthropicProvider("k", "claude-haiku-5-5", cli, effort="low").extract("s", "u", {"type": "object", "properties": {}})
+    assert seen["output_config"] == {"effort": "low"}
 
 
 def test_provider_selection(monkeypatch):
@@ -312,11 +325,11 @@ def test_eproc_cites_evento_never_id_and_inherits_across_pages(env):
 
 
 @pytest.mark.parametrize("tipo,sheet,prompt,titulo", [
-    ("apelacao", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
-    ("agravo", "outras_acoes", "recursos", "Relatório de Tramitação Recursal"),
-    ("embargos", "embargos", "outras_acoes", "Relatório de Status Processual"),
-    ("execucao_fiscal", "execucoes_fiscais", "execucoes_fiscais", "Relatório de Status de Execução e Penhoras"),
-    ("outras_acoes", "outras_acoes", "outras_acoes", "Relatório de Status Processual"),
+    ("apelacao", "outras_acoes", "recursos", "Cronologia da Tramitação Recursal"),
+    ("agravo", "outras_acoes", "recursos", "Cronologia da Tramitação Recursal"),
+    ("embargos", "embargos", "outras_acoes", "Cronologia dos Atos Processuais"),
+    ("execucao_fiscal", "execucoes_fiscais", "execucoes_fiscais", "Cronologia dos Atos Processuais"),
+    ("outras_acoes", "outras_acoes", "outras_acoes", "Cronologia dos Atos Processuais"),
 ])
 def test_tipo_chosen_in_upload_selects_sheet_and_prompt(env, tipo, sheet, prompt, titulo):
     c, llm, tmp = env
@@ -610,3 +623,968 @@ def test_gemini_retries_503_overload_then_falls_back_to_reserve_model(monkeypatc
     with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
         GeminiProvider("k", "principal", SimpleNamespace(models=m4), fallback_model="reserva").extract("s", "u", schema)
     assert esperas == []
+
+
+def test_chat_is_impatient_but_extraction_is_patient(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    esperas = []
+    monkeypatch.setattr(llm.time, "sleep", lambda s: esperas.append(s))
+
+    class Models:
+        def __init__(self, msg):
+            self.msg, self.modelos = msg, []
+
+        def generate_content(self, model, contents, config):
+            self.modelos.append(model)
+            raise RuntimeError(self.msg)
+
+    m = Models("503 UNAVAILABLE high demand")
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "p", SimpleNamespace(models=m)).generate("s", "u")
+    assert m.modelos == ["p", "p"] and esperas == [5]  # chat: 2 tentativas, 5 s (não 85 s)
+
+    esperas.clear()
+    m2 = Models("503 UNAVAILABLE high demand")
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "p", SimpleNamespace(models=m2), fallback_model="r").generate("s", "u")
+    assert m2.modelos == ["p", "p", "r", "r"]  # depois tenta o modelo reserva
+
+    m3 = Models("429 RESOURCE_EXHAUSTED: Please retry in 32s")  # prazo longo: no chat não espera
+    esperas.clear()
+    with pytest.raises(RuntimeError):
+        GeminiProvider("k", "p", SimpleNamespace(models=m3)).generate("s", "u")
+    assert len(m3.modelos) == 1 and esperas == []
+
+
+def test_corresponsaveis_are_formatted_one_per_line_with_cpf_or_cnpj():
+    f = ex.format_corresponsaveis
+    esperado = "João Victor - CPF: 529.982.247-25\nBETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81"
+    assert f("João Victor - CPF: 529.982.247-25\nBETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81") == esperado  # já no formato
+    assert f("João Victor (CPF 52998224725); BETA COMERCIO LTDA, inscrita no CNPJ sob o nº 11222333000181") == esperado  # texto corrido, só números
+    assert f("1. João Victor - 529.982.247-25\n2) BETA COMERCIO LTDA CNPJ/MF 11.222.333/0001-81") == esperado  # numeração e rótulos
+    assert f("• João Victor – CPF: 529.982.247-25\n- BETA COMERCIO LTDA – CNPJ: 11.222.333/0001-81") == esperado  # marcadores
+    assert f(["João Victor 529.982.247-25", "BETA COMERCIO LTDA 11.222.333/0001-81"]) == esperado  # lista JSON
+    assert f("João Victor - CPF: 529.982.247-25\nJoão Victor, CPF 529.982.247-25") == "João Victor - CPF: 529.982.247-25"  # repetido
+    assert f("João Victor - CPF: 529.982.247-26") == "João Victor - CPF: 529.982.247-26 (conferir dígitos)"  # dígito inválido
+    assert f("Maria Souza\nBETA LTDA - 11.222.333/0001-81") == "Maria Souza - documento não informado\nBETA LTDA - CNPJ: 11.222.333/0001-81"
+    assert f("11.222.333/0001-81") == "(nome não informado) - CNPJ: 11.222.333/0001-81"
+    assert f("Não há pedido de redirecionamento") == "Não há pedido de redirecionamento"  # sem documento: não mexe
+    assert f(None) is None and f("   ") is None and f([]) is None
+
+
+def test_validate_applies_corresponsaveis_format_to_llm_output():
+    out = ex.validate(SHEETS["execucoes_fiscais"], {"observacoes": "x", "redirecionamento": "SIM",
+                      "corresponsaveis": "João Victor CPF 52998224725; BETA LTDA CNPJ 11222333000181"})
+    assert out["corresponsaveis"] == "João Victor - CPF: 529.982.247-25\nBETA LTDA - CNPJ: 11.222.333/0001-81"
+    assert "UMA pessoa ou empresa POR LINHA" in ex.tool_schema(SHEETS["execucoes_fiscais"])["properties"]["corresponsaveis"]["description"]
+
+
+def test_corresponsaveis_several_people_on_the_same_line():
+    f = ex.format_corresponsaveis
+    texto = "BETA COMERCIO LTDA, inscrita no CNPJ sob o nº 11222333000181; João Victor (CPF 52998224725) e MARIA SOUZA - 987.654.321-00"
+    assert f(texto) == ("BETA COMERCIO LTDA - CNPJ: 11.222.333/0001-81\nJoão Victor - CPF: 529.982.247-25\nMARIA SOUZA - CPF: 987.654.321-00")
+    assert f("Ana (CPF 52998224725), Bruno (CPF 11144477735) e Carla CNPJ 11222333000181") == (
+        "Ana - CPF: 529.982.247-25\nBruno - CPF: 111.444.777-35\nCarla - CNPJ: 11.222.333/0001-81")
+
+
+def test_context_info_reports_what_was_cut():
+    from app.ingest.chunker import chunk_page
+    from app.search.memory import MemoryStore
+
+    pages = [{"doc_id": "d", "page": i, "label": f"pg. {i}", "text": ("texto neutro " * 50)} for i in range(1, 101)]
+    st = MemoryStore()
+    for p in pages:
+        st.index("d", chunk_page(p["page"], p["text"]))
+    _, inteiro = ex.select_context_info(pages, 10_000_000, st, ["d"])
+    assert inteiro["cortado"] is False and inteiro["paginas_enviadas"] == 100 and inteiro["paginas_omitidas"] == 0
+    txt, corte = ex.select_context_info(pages, 20_000, st, ["d"])
+    assert corte["cortado"] is True and corte["paginas_total"] == 100 and corte["paginas_enviadas"] < 100
+    assert corte["paginas_omitidas"] == 100 - corte["paginas_enviadas"] and corte["caracteres_enviados"] <= 20_000
+    assert ex.select_context(pages, 20_000, st, ["d"]) == txt  # a versão antiga continua igual
+
+
+def test_providers_expose_token_usage_per_call():
+    from app.llm import AnthropicProvider, GeminiProvider
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            return SimpleNamespace(text='{"observacoes": "ok"}', usage_metadata=SimpleNamespace(
+                prompt_token_count=25000, candidates_token_count=800, thoughts_token_count=300))
+
+    g = GeminiProvider("k", "m", SimpleNamespace(models=Models()))
+    assert g.last_usage is None
+    g.extract("s", "u", ex.tool_schema(SHEETS["outras_acoes"]))
+    assert g.last_usage == {"entrada": 25000, "saida": 800, "raciocinio": 300}
+
+    a = AnthropicProvider("k", "m", SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: SimpleNamespace(
+        content=[SimpleNamespace(type="tool_use", input={"observacoes": "x"})], usage=SimpleNamespace(input_tokens=111, output_tokens=22)))))
+    a.extract("s", "u", {"type": "object", "properties": {}})
+    assert a.last_usage == {"entrada": 111, "saida": 22, "raciocinio": None}
+
+    import threading
+    visto = []
+    t = threading.Thread(target=lambda: visto.append(g.last_usage))  # outra thread não enxerga o uso desta
+    t.start(); t.join()
+    assert visto == [None]
+
+
+def test_pdf_pages_carry_reading_time_and_ocr_time(tmp_path, monkeypatch):
+    import time as _t
+
+    from app.ingest import pdf
+
+    monkeypatch.setattr(pdf, "ocr_available", lambda: True)
+    monkeypatch.setattr(pdf, "_ocr_page", lambda page, s: (_t.sleep(0.05), "DARF pago R$ 77,00 CNPJ 11.222.333/0001-81")[1])
+    p = tmp_path / "a.pdf"
+    make_pdf(p)  # 3 páginas de texto + 1 imagem (OCR)
+    pages = list(pdf.iter_pages(str(p), Settings()))
+    assert [x.method for x in pages] == ["text", "text", "text", "ocr"]
+    assert all(x.seconds >= 0 for x in pages) and pages[3].seconds >= 0.05 > pages[0].seconds
+
+
+def test_measurements_are_recorded_for_pdf_and_extraction_and_exposed_in_sheet(env):
+    c, llm, tmp = env
+    case = c.post("/api/cases", json={"nome": "Medições"}).json()
+    pdf = tmp / f"{NUM}_V001_001-1-4.pdf"
+    make_pdf(pdf, image_page=False)
+    with pdf.open("rb") as f:
+        up = c.post("/api/documents", data={"case_id": case["id"], "tipo": "execucao_fiscal"}, files={"file": (pdf.name, f, "application/pdf")}).json()
+    d = wait(c, up["id"])
+    m = d["result"]["medidas"]
+    assert m["tokens"] == {"entrada": 1000, "saida": 50, "raciocinio": None}
+    assert m["chamada"] == {"tentativas": 1, "espera_s": 0.0, "modelo": "fake"}
+    assert m["contexto"]["cortado"] is False and m["contexto"]["paginas_total"] == 3 and m["contexto"]["paginas_enviadas"] == 3
+    assert m["extracao_s"] >= 0
+    t = d["metadata"]["tempos"]
+    assert t["paginas"] == 3 and t["total_s"] >= 0 and t["ocr_paginas"] == 0
+    linha = c.get(f"/api/cases/{case['id']}/sheet").json()["linhas"][0]
+    assert linha["medidas"]["tokens"]["entrada"] == 1000 and linha["docs"][0]["tempos"]["paginas"] == 3
+
+
+def test_provider_reports_attempts_wait_and_model_that_answered(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+
+    class Models:
+        def __init__(self, falha_modelo, vezes):
+            self.f, self.v, self.n = falha_modelo, vezes, 0
+
+        def generate_content(self, model, contents, config):
+            self.n += 1
+            if model == self.f and self.n <= self.v:
+                raise RuntimeError("503 UNAVAILABLE high demand")
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    schema = ex.tool_schema(SHEETS["outras_acoes"])
+    g = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 2)))
+    assert g.last_call is None
+    g.extract("s", "u", schema)
+    c = g.last_call
+    assert (c["tentativas"], c["espera_s"], c["modelo"]) == (3, 35.0, "p")  # 10 s + 25 s de espera antes do acerto
+    assert [t["r"] for t in c["tempos"]] == ["503", "503", "ok"]  # duração e resultado de cada tentativa
+
+    g2 = GeminiProvider("k", "p", SimpleNamespace(models=Models("p", 99)), fallback_model="r")
+    g2.extract("s", "u", schema)
+    assert g2.last_call["modelo"] == "r" and g2.last_call["tentativas"] == 5 and g2.last_call["espera_s"] == 85.0
+
+
+def test_gemini_thinking_level_by_model_and_timeout_counts_as_transient(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    vistos = []
+
+    class Models:
+        n = 0
+
+        def generate_content(self, model, contents, config):
+            vistos.append((model, config.thinking_config))
+            Models.n += 1
+            if Models.n == 1:
+                raise RuntimeError("ReadTimeout: The read operation timed out")  # tentativa travada: tenta de novo
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    g = GeminiProvider("k", "gemini-3.1-pro-preview", SimpleNamespace(models=Models()), thinking="low")
+    g.extract("s", "u", ex.tool_schema(SHEETS["outras_acoes"]))
+    assert g.last_call["tentativas"] == 2 and g.last_call["tempos"][0]["r"] == "timeout"
+    assert vistos[0][1].thinking_level.value.lower() == "low"
+    assert g._thinking_cfg("gemini-2.5-flash").thinking_budget == 1024 and g._thinking_cfg("outro-modelo") is None
+    assert GeminiProvider("k", "m", SimpleNamespace(models=Models()))._thinking_cfg("gemini-3-flash") is None  # vazio = padrão
+
+
+def test_execucao_fiscal_prompt_is_chronology_only():
+    texto = ex.load_prompt("execucoes_fiscais")
+    for velho in ("Resumo de Bens e Valores Constritos", "Resumo de Defesas e Incidentes", "Expropriações e Leilões", "Próximo Passo do Processo"):
+        assert velho not in texto  # os quatro blocos de resumo saíram
+    assert "ordem cronológica crescente" in texto and "[ORIGEM] - [dd/mm/aaaa]" in texto
+    assert "Não informado no extrato" in texto and "mero expediente" in texto
+
+
+def test_extraction_error_clears_on_retry_and_on_pdf_delete_and_times_are_recorded(env):
+    c, llm, tmp = env
+    cid = c.post("/api/cases", json={"nome": "G"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    pdf = (tmp / "a.pdf").read_bytes()
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", pdf, "application/pdf")}, data={"case_id": cid}).json()
+    w = wait(c, d["id"])
+    doc = c.get(f"/api/documents/{d['id']}").json()
+    assert doc["started_at"] and doc["finished_at"] and doc["finished_at"] >= doc["started_at"]  # leitura do PDF anotada
+    proc = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+    assert proc["ext_status"] == "ok" and proc["ext_started_at"] and proc["ext_finished_at"]
+
+    def boom(system, user, schema):
+        raise RuntimeError("503 UNAVAILABLE falha de teste")
+    llm.extract = boom
+    c.post(f"/api/cases/{cid}/processes/{NUM}/reextract")
+    for _ in range(100):
+        p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+        if p["stale"] == 0 and p["error"]:
+            break
+        time.sleep(0.1)
+    assert p["error"] and p["ext_status"] == "erro" and p["ext_finished_at"]  # erro também tem fim registrado
+
+    c.delete(f"/api/documents/{d['id']}")
+    for _ in range(100):
+        p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+        if p["stale"] == 0:
+            break
+        time.sleep(0.1)
+    assert p["error"] is None  # o erro sai junto com o PDF
+
+
+
+def test_gemini_minimal_downgrades_to_low_and_gen3_drops_temperature(monkeypatch):
+    from app import llm
+    from app.llm import GeminiProvider
+
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    vistos = []
+
+    class Models:
+        def generate_content(self, model, contents, config):
+            nivel = config.thinking_config.thinking_level.value.lower() if config.thinking_config else None
+            vistos.append((model, nivel, config.temperature))
+            if model == "principal" and nivel == "minimal":
+                raise RuntimeError("400 INVALID_ARGUMENT: thinking level minimal is not supported")
+            return SimpleNamespace(text='{"observacoes": "ok"}')
+
+    g = GeminiProvider("k", "gemini-3.5-flash-lite", SimpleNamespace(models=Models()), thinking="minimal",
+                       fallback_model="gemini-3.8-flash", thinking_fallback="low")
+    schema = ex.tool_schema(SHEETS["outras_acoes"])
+    g._call(model="gemini-3.8-flash", contents="u", config=g._config("s"))  # reserva usa o nível próprio
+    assert vistos[-1] == ("gemini-3.8-flash", "low", None)  # e a temperatura sai nos modelos da família 3
+    g.model = "gemini-3.5-flash-lite"
+    g.extract("s", "u", schema)
+    assert vistos[-1][1] == "minimal" and vistos[-1][2] is None
+
+
+def test_delete_case_removes_everything_and_list_has_summary(env):
+    c, llm, tmp = env
+    cid = c.post("/api/cases", json={"nome": "Apagar"}).json()["id"]
+    outro = c.post("/api/cases", json={"nome": "Fica"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    resumo = next(x for x in c.get("/api/cases").json() if x["id"] == cid)
+    assert resumo["pdfs"] == 1 and resumo["processos"] == 1 and resumo["extraidos"] == 1 and resumo["atividade"]
+    doc_path = c.get(f"/api/documents/{d['id']}").json()["path"]
+    r = c.delete(f"/api/cases/{cid}")
+    assert r.status_code == 200 and r.json()["documentos"] == 1
+    assert [x["id"] for x in c.get("/api/cases").json()] == [outro]
+    assert c.get(f"/api/documents/{d['id']}").status_code == 404 and not __import__("pathlib").Path(doc_path).exists()
+    assert c.delete(f"/api/cases/{cid}").status_code == 404
+
+
+def test_timeout_504_has_its_own_orientation():
+    from app.worker import explain_llm_error
+    msg = explain_llm_error(RuntimeError("504 DEADLINE_EXCEEDED. Deadline expired before operation could complete."))
+    assert msg.startswith("O Gemini não respondeu a tempo (504)") and "Detalhe técnico:" in msg
+
+
+def test_health_shows_version_and_model_and_static_is_not_cached(env):
+    from app import APP_VERSION
+    c, _, _ = env
+    h = c.get("/api/health").json()
+    assert h["versao"] == APP_VERSION and "modelo" in h and "raciocinio" in h
+    r = c.get("/app.js")
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache"
+
+
+def test_compose_passes_the_llm_settings_to_the_containers():
+    texto = open("docker-compose.yml", encoding="utf-8").read()
+    for var in ("GEMINI_THINKING", "GEMINI_THINKING_FALLBACK", "GEMINI_TIMEOUT_S", "GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "CONTEXT_BUDGET_CHARS"):
+        assert f"  {var}:" in texto  # sem isso, o valor do .env não chega ao container
+
+
+def test_load_dotenv_reads_values_without_overriding(tmp_path, monkeypatch):
+    from app.config import load_dotenv
+    f = tmp_path / ".env"
+    f.write_text('# comentário\nA_X=um\nB_X="dois três"\nC_X=quatro # fim\nJA_TEM=novo\n\nlinha-sem-igual\n', encoding="utf-8")
+    for k in ("A_X", "B_X", "C_X"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("JA_TEM", "original")
+    assert load_dotenv(f) == 3
+    import os
+    assert (os.environ["A_X"], os.environ["B_X"], os.environ["C_X"], os.environ["JA_TEM"]) == ("um", "dois três", "quatro", "original")
+    assert load_dotenv(tmp_path / "nao-existe") == 0
+
+
+@pytest.mark.parametrize("nome", ["outras_acoes", "recursos"])
+def test_other_prompts_are_chronology_only_like_the_execution_prompt(nome):
+    texto = ex.load_prompt(nome)
+    for velho in ("Resumo da Origem", "Status Atual (Último Parágrafo)", "Resumo do Recurso", "Pedidos da Parte Recorrente", "1. ", "2. ", "3. "):
+        assert velho not in texto  # sem blocos de resumo numerados
+    assert "ordem cronológica crescente" in texto and "[ORIGEM] - [dd/mm/aaaa]" in texto
+    assert "Não informado no extrato" in texto and "mero expediente" in texto and "Eu fornecerei" in texto
+
+
+def test_format_cronologia_one_act_per_line():
+    t = "- Evento 1, pg. 1 – 12/03/2012 – Ajuizada. Evento 5, pg. 2 - 20/04/2012 - Citação;\n2. Evento 9 - 01/01/2013 - Sentença que\njulga procedente."
+    assert "\n\n" in ex.format_cronologia(t) and ex.format_cronologia(ex.format_cronologia(t)) == ex.format_cronologia(t)
+    assert [x for x in ex.format_cronologia(t).split("\n") if x] == [
+        "Evento 1, pg. 1 - 12/03/2012 - Ajuizada.", "Evento 5, pg. 2 - 20/04/2012 - Citação",
+        "Evento 9 - 01/01/2013 - Sentença que julga procedente."]
+    assert ex.format_cronologia("Não informado no extrato") == "Não informado no extrato" and ex.format_cronologia(None) is None
+
+
+def test_manual_flag_blocks_ai_writes_note_in_sheet_and_export(env):
+    c, llm, tmp = env
+    cid = c.post("/api/cases", json={"nome": "M"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    n_chamadas = len(llm.calls)
+    r = c.put(f"/api/cases/{cid}/processes/{NUM}/manual", json={"manual": True, "nota": "Feito no SAJ por mim"})
+    assert r.status_code == 200
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    lin = next(x for x in sheet["linhas"] if x["numero"] == NUM)
+    assert lin["estado"] == "manual" and lin["manual"]["ativo"] and lin["manual"]["nota"] == "Feito no SAJ por mim"
+    assert c.post(f"/api/cases/{cid}/processes/{NUM}/reextract").status_code == 409  # a IA não refaz
+    assert len(llm.calls) == n_chamadas
+    # feito à mão: a planilha mostra só a marcação (sem valores da IA); o resultado da IA fica guardado
+    assert lin["valores"]["observacoes"] == "Processo analisado manualmente. Feito no SAJ por mim" and not lin["citacoes"]
+    p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+    assert p["manual"] == 1 and p["result"]
+    r = c.put(f"/api/cases/{cid}/processes/{NUM}/manual", json={"manual": False})
+    assert r.status_code == 200 and c.get(f"/api/cases/{cid}/processes/{NUM}").json()["manual"] == 0
+    volta = next(x for x in c.get(f"/api/cases/{cid}/sheet").json()["linhas"] if x["numero"] == NUM)
+    assert volta["estado"] == "pronto" and "analisado manualmente" not in (volta["valores"].get("observacoes") or "")  # o texto da IA volta
+    assert c.put(f"/api/cases/{cid}/processes/NAO/manual", json={"manual": True}).status_code == 404
+
+
+def test_manual_note_is_written_in_the_exported_spreadsheet(env):
+    c, _, _ = env
+    cid = c.post("/api/cases", json={"nome": "M2"}).json()["id"]
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    numero = c.get(f"/api/cases/{cid}").json()["processos"][0]["numero"]
+    c.put(f"/api/cases/{cid}/processes/{numero}/manual", json={"manual": True, "nota": "Concluído em 05/11"})
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    achou = [cel.value for ws in wb.worksheets for row in ws.iter_rows() for cel in row if isinstance(cel.value, str) and "analisado manualmente" in cel.value]
+    assert achou and "Concluído em 05/11" in achou[0]
+
+
+def test_medicoes_pdf_endpoint_returns_a_pdf_without_the_word_caso_in_the_title(env):
+    import pymupdf
+    c, _, tmp = env
+    cid = c.post("/api/cases", json={"nome": "Grupo X"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    r = c.get(f"/api/cases/{cid}/medicoes.pdf?tz=180")
+    assert r.status_code == 200 and r.headers["content-type"] == "application/pdf" and "Medicoes" in r.headers["content-disposition"]
+    texto = "".join(p.get_text() for p in pymupdf.open(stream=r.content))
+    assert "Relatório de medições" in texto and "Grupo X" in texto and NUM in texto and "Registro de execução" in texto
+    assert "Medições do caso" not in texto
+    assert "Medições do caso" not in open("static/index.html", encoding="utf-8").read()
+    assert c.get("/api/cases/inexistente/medicoes.pdf").status_code == 404
+
+
+def _caso_com_pdf(c, tmp, nome="H"):
+    cid = c.post("/api/cases", json={"nome": nome}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    return cid, d
+
+
+def test_history_records_versions_and_restores_a_previous_one(env):
+    c, _, tmp = env
+    cid, _ = _caso_com_pdf(c, tmp)
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    v0 = c.get(f"{base}/history").json()["versoes"]
+    assert [v["origem"] for v in v0] == ["Extração pela IA"]
+    original = c.get(base).json()["result"]["fields"]["observacoes"]
+    assert c.put(f"{base}/review", json={"observacoes": "Primeira edição", "reviewed": False}).status_code == 200
+    assert c.put(f"{base}/review", json={"observacoes": "Primeira edição", "reviewed": False}).status_code == 200  # sem mudança: não cria versão
+    c.put(f"{base}/review", json={"observacoes": "Texto do analista", "reviewed": True})
+    vs = c.get(f"{base}/history").json()["versoes"]
+    assert len(vs) == 3 and vs[0]["origem"] == "Edição do analista" and "Observações" in vs[0]["resumo"] and "revisado" in vs[0]["resumo"]
+    det = c.get(f"{base}/history/{vs[-1]['id']}").json()
+    assert any(x["titulo"].startswith("Observações") for x in det["campos"]) and det["reviewed"] is False
+    assert c.post(f"{base}/history/{vs[-1]['id']}/restore").status_code == 200  # volta à extração original
+    p = c.get(base).json()
+    assert p["result"]["fields"]["observacoes"] == original and p["reviewed"] == 0
+    assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Restauração"
+    assert c.post(f"{base}/history/nao-existe/restore").status_code == 404
+
+
+def test_hide_and_delete_a_single_process(env):
+    c, _, tmp = env
+    cid, d = _caso_com_pdf(c, tmp)
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    assert c.put(f"{base}/hidden", json={"oculto": True}).status_code == 200
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    assert next(l for l in sheet["linhas"] if l["numero"] == NUM)["oculto"] is True
+    aba = next(l for l in sheet["linhas"] if l["numero"] == NUM)["aba"]
+    nome = {"execucoes_fiscais": "Execuções Fiscais", "outras_acoes": "Outras Ações"}[aba]
+    visiveis = next(a for a in sheet["abas"] if a["key"] == aba)["n"]
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    linhas_oculto = wb[nome].max_row
+    assert wb["Relatório"].max_row == 2 and NUM not in [r[0].value for r in wb[nome].iter_rows()]  # o oculto não vai à planilha
+    c.put(f"{base}/hidden", json={"oculto": False})
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    assert wb[nome].max_row == linhas_oculto + 1 and wb["Relatório"].max_row == 3
+    assert next(a for a in c.get(f"/api/cases/{cid}/sheet").json()["abas"] if a["key"] == aba)["n"] == visiveis + 1
+    r = c.delete(base)
+    assert r.status_code == 200 and r.json()["documentos"] == 1
+    assert c.get(base).status_code == 404 and c.get(f"/api/documents/{d['id']}").status_code == 404
+    assert c.get(f"{base}/history").status_code == 404 and c.delete(base).status_code == 404
+    assert len(c.get(f"/api/cases/{cid}").json()["processos"]) == 1  # o outro processo do caso continua
+
+
+def test_fraud_items_are_suggestions_until_the_analyst_authorizes(env):
+    c, llm, tmp = env
+    llm.payload["fraudes"] = [{"tipo": "fraude a execucao", "analise": "deferido", "valor_causa": None, "resumo": "PGFN alegou; juiz deferiu", "citacao": "VOL 001, pg. 2"},
+                              {"tipo": "blindagem societária", "analise": "talvez"}]
+    cid, _ = _caso_com_pdf(c, tmp)
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    fr = sheet["fraudes"]
+    assert [f["tipo"] for f in fr] == ["FRAUDE À EXECUÇÃO", "OUTRAS FRAUDES"] and fr[0]["analise"] == "DEFERIDO" and fr[1]["analise"] is None
+    assert all(f["_st"] == "sugerido" for f in fr) and fr[0]["classe"] == "Execução Fiscal (SIDA)" and "blindagem" in fr[1]["resumo"]
+    assert sheet["listas"]["fraude_tipo"][0] == "FRAUDE À EXECUÇÃO" and next(l for l in sheet["linhas"] if l["numero"] == NUM)["sugestoes"] == 3
+    aba = lambda: load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))["Alegações de Fraude"]
+    assert aba().max_row == 1  # nada vai à planilha sem autorização
+    assert c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "editar", "indices": [1], "valores": {"tipo": "INVENTADO"}}).status_code == 400
+    assert c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "editar", "indices": [1], "valores": {"tipo": "SIMULAÇÃO", "analise": "INDEFERIDO"}}).status_code == 200
+    c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "autorizar", "indices": [0]})
+    c.put(f"{base}/itens", json={"lista": "fraudes", "acao": "descartar", "indices": [1]})
+    ws = aba()
+    assert ws.max_row == 2 and [x.value for x in ws[2]][:4] == [NUM, "Execução Fiscal (SIDA)", "FRAUDE À EXECUÇÃO", "DEFERIDO"]
+    depois = c.get(f"/api/cases/{cid}/sheet").json()
+    assert [f["_st"] for f in depois["fraudes"]] == ["autorizado"]  # o descartado some da aba
+    assert next(a for a in depois["abas"] if a["key"] == "fraude")["n"] == 1
+    assert c.put(f"{base}/itens", json={"lista": "x", "acao": "autorizar"}).status_code == 400
+
+
+def test_bens_export_shows_matricula_only_on_the_first_row_of_each_property():
+    from app.template import item_row
+    p = {"numero": NUM, "mcfly": {}}
+    a = {"matricula": "28.749 (CRI Formiga)", "caracteristicas": "Gleba", "proprietario": "Alfa", "ato": "R-14", "gravames": "Penhora", "_st": "autorizado", "citacao": "x"}
+    b = {**a, "ato": "R-15"}
+    assert item_row("bens", p, a)["matricula"].startswith("28.749") and "citacao" not in item_row("bens", p, a)
+    segunda = item_row("bens", p, b, a)
+    assert "matricula" not in segunda and "proprietario" not in segunda and segunda["ato"] == "R-15"
+
+
+def test_template_optional_columns_get_order_number_and_analysis_status():
+    from app import template as tpl
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Execuções Fiscais"
+    ws.append(["Nº", "Número do processo judicial", "EXIT. GARANTIA", "Situação da análise"])
+    ws.append([None, NUM, None, None])
+    buf = io.BytesIO()
+    wb.save(buf)
+    assert "dicas" not in tpl.analyze(buf.getvalue()) or not tpl.analyze(buf.getvalue())["dicas"]
+    procs = [{"numero": NUM, "mcfly": {"classe": "Execução Fiscal"}, "manual": 1, "manual_note": "no SAJ", "result": None},
+             {"numero": "0000009-99.2020.4.01.3811", "mcfly": {"classe": "Execução Fiscal"}, "reviewed": 1,
+              "result": {"sheet": "execucoes_fiscais", "fields": {"garantia": "IMÓVEL"}, "bens": [], "fraudes": []}}]
+    out = load_workbook(io.BytesIO(tpl.fill(buf.getvalue(), procs)))["Execuções Fiscais"]
+    assert [c.value for c in out[2]] == [1, NUM, None, "Feito manualmente. no SAJ"]
+    assert [c.value for c in out[3]] == [2, "0000009-99.2020.4.01.3811", "IMÓVEL", "Revisado"]
+    # modelo sem as colunas: a análise avisa que elas são opcionais
+    wb2 = Workbook()
+    wb2.active.title = "Execuções Fiscais"
+    wb2.active.append(["Número do processo judicial", "EXIT. GARANTIA"])
+    b2 = io.BytesIO()
+    wb2.save(b2)
+    assert "Situação da análise" in tpl.analyze(b2.getvalue())["dicas"][0]
+
+
+def test_dates_money_and_art40_list_are_standardized_by_code():
+    from app.schemas import ARQUIVADA_40, fmt_arquivada, fmt_data_br, fmt_moeda_br
+    assert [fmt_data_br(x) for x in ("2018-09-28", "28.9.18", "5-10-2006", "28 de setembro de 2018", "28/09/2018", "sem data")] == \
+        ["28/09/2018", "28/09/2018", "05/10/2006", "28/09/2018", "28/09/2018", "sem data"]
+    assert [fmt_moeda_br(x) for x in ("2627732.00", "R$2.627.732,00", "2,627,732.00", "1.250,4", "1.250", "746019", "R$ 0", "R$ 10 mil (aprox.)")] == \
+        ["R$ 2.627.732,00", "R$ 2.627.732,00", "R$ 2.627.732,00", "R$ 1.250,40", "R$ 1.250,00", "R$ 746.019,00", "R$ 0,00", "R$ 10 mil (aprox.)"]
+    assert ARQUIVADA_40 == ["Não", "< 3 anos", "> 3 anos"]
+    assert [fmt_arquivada(x, True) for x in ("NÃO", "menos de 3 anos", "> 3 ANOS", "SIM", None)] == ["Não", "< 3 anos", "> 3 anos", None, None]
+    sheet = SHEETS["execucoes_fiscais"]
+    out = ex.validate(sheet, {"valor_garantia": "746019.6", "data_garantia": "2006-10-05", "arquivada_40": "SIM", "observacoes": "x"})
+    assert out["valor_garantia"] == "R$ 746.019,60" and out["data_garantia"] == "05/10/2006"
+    assert out["arquivada_40"] is None and "arquivada_40" in out["_revisar"]  # 'SIM' sem o prazo não cabe na lista: o analista escolhe
+    assert next(f for f in sheet.fields if f.key == "arquivada_40").options == ARQUIVADA_40
+    assert ex.normalize_fraude({"tipo": "SIMULAÇÃO", "valor_causa": "128400.11"})["valor_causa"] == "R$ 128.400,11"
+
+
+def test_pgfn_guidelines_file_is_appended_to_the_prompt_without_comments(tmp_path, monkeypatch):
+    monkeypatch.setattr(ex, "PROMPTS_DIR", tmp_path)
+    (tmp_path / "outras_acoes.md").write_text("PROMPT BASE", encoding="utf-8")
+    assert ex.load_orientacoes() == ""
+    (tmp_path / "orientacoes_pgfn.md").write_text("<!-- instruções\nde uso -->\nRegra da casa: X.\n", encoding="utf-8")
+    assert ex.load_orientacoes() == "Regra da casa: X."
+    visto = {}
+
+    class L:
+        def extract(self, system, user, schema):
+            visto["s"] = system
+            return {"observacoes": "ok"}
+
+    ex.extract_with_llm(SHEETS["outras_acoes"], "outras_acoes", "ctx", L())
+    assert "ORIENTAÇÕES DA PGFN" in visto["s"] and "Regra da casa: X." in visto["s"] and "instruções" not in visto["s"]
+    assert "Datas SEMPRE no formato dd/mm/aaaa" in visto["s"] and "R$ 1.234,56" in visto["s"] and "Data de hoje:" in visto["s"]
+
+
+def test_review_normalizes_typed_date_and_value(env):
+    c, _, tmp = env
+    cid = c.post("/api/cases", json={"nome": "N"}).json()["id"]
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid}).json()
+    wait(c, d["id"])
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    lin = next(x for x in c.get(f"/api/cases/{cid}/sheet").json()["linhas"] if x["numero"] == NUM)
+    assert lin["valores"]["data_garantia"] == "28/09/2018" and lin["valores"]["arquivada_40"] == "Não"  # a IA respondeu 2018-09-28 e NÃO
+    assert c.put(f"{base}/review", json={"fields": {"data_garantia": "2020-01-31", "valor_garantia": "1500"}, "reviewed": False}).status_code == 200
+    f = c.get(base).json()["result"]["fields"]
+    assert f["data_garantia"] == "31/01/2020" and f["valor_garantia"] == "R$ 1.500,00"
+    assert c.put(f"{base}/review", json={"fields": {"arquivada_40": "SIM"}, "reviewed": False}).status_code == 400
+    assert c.put(f"{base}/review", json={"fields": {"arquivada_40": "> 3 anos"}, "reviewed": False}).status_code == 200
+
+
+def _mcfly_bagunçado():
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Mcfly"
+    ws.append(["NÚMERO DO PROCESSO CNJ", "Polo ativo", "Polo passivo", "Classe SAJ", "Inscrições processo principal",
+               "Somatório inscrições (processo principal e vinculados)"])
+    ws.append([NUM, "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 6 05 009561-42", 759527.01])
+    ws.append([NUM, "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 2 05 001111-11", 800000])  # repetido, valores diferentes
+    ws.append(["0000002-00.2020.4.01.0000", "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 6 06 000001-01", 1000.5])
+    ws.append(["0000002-00.2020.4.01.0000", "FAZENDA NACIONAL", "FERDIL INTERMEDIACAO LTDA", "Execução Fiscal (SIDA)", "60 6 06 000001-01", 1000.5])  # idêntico
+    ws.append(["0000003-00.2021.4.01.0000", "FAZENDA NACIONAL", "PADARIA DO JOAO ME", "Execução Fiscal (SIDA)", "60 6 07 000002-02", 50])  # por engano
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_mcfly_preview_flags_repeated_conflicting_and_foreign_processes_and_imports_the_selection(env):
+    c, _, _ = env
+    cid = c.post("/api/cases", json={"nome": "Grupo Ferdil"}).json()["id"]
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})  # NUM já está no caso
+    r = c.post(f"/api/cases/{cid}/mcfly/preview", files={"file": ("x.xlsx", _mcfly_bagunçado(), "application/octet-stream")}).json()
+    assert (r["linhas"], len(r["processos"]), r["repetidos"], r["conflitos"], r["suspeitos"], r["novos"]) == (5, 3, 2, 1, 1, 2)
+    assert r["devedor"] == ["ferdil"] and r["fora_do_mcfly"] == ["0000001-00.2020.4.01.0000"]
+    por = {p["numero"]: p for p in r["processos"]}
+    a, b, estranho = por[NUM], por["0000002-00.2020.4.01.0000"], por["0000003-00.2021.4.01.0000"]
+    assert a["linhas"] == 2 and a["inscricoes"] == "60 6 05 009561-42\n60 2 05 001111-11" and a["no_caso"] and a["marcar"]
+    assert a["conflitos"] == {"somatorio": ["R$ 759.527,01", "R$ 800.000,00"]} and a["somatorio"] == "R$ 759.527,01"
+    assert b["linhas"] == 2 and not b["conflitos"] and b["somatorio"] == "R$ 1.000,50" and b["marcar"] and not b["no_caso"]
+    assert estranho["suspeito"] and not estranho["marcar"]  # novo e de outra parte: vem desmarcado
+    assert r["processos"][0]["numero"] == estranho["numero"]  # suspeitos primeiro
+    imp = c.post(f"/api/cases/{cid}/mcfly", files={"file": ("x.xlsx", _mcfly_bagunçado(), "application/octet-stream")},
+                 data={"selecionados": '["%s", "0000002-00.2020.4.01.0000"]' % NUM, "escolhas": '{"%s": {"somatorio": "R$ 800.000,00"}}' % NUM}).json()
+    assert imp == {"importados": 2, "novos": 1, "atualizados": 1}
+    procs = {p["numero"]: p for p in c.get(f"/api/cases/{cid}").json()["processos"]}
+    assert "0000003-00.2021.4.01.0000" not in procs and procs[NUM]["mcfly"]["somatorio"] == "R$ 800.000,00"
+    assert procs[NUM]["mcfly"]["juizo"] == "02ª Vara - FORMIGA"  # o que o cadastro já tinha e o Mcfly novo não trouxe continua
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    ef = [[x.value for x in row] for row in wb["Execuções Fiscais"].iter_rows()]
+    lin = dict(zip(ef[0], next(l for l in ef if l[0] == NUM)))
+    assert lin["Inscrições processo principal"].startswith("60 6 05 009561-42") and lin["Somatório inscrições (processo principal e vinculados)"] == "R$ 800.000,00"
+
+
+def test_mcfly_real_export_shape_dash_placeholders_party_groups_and_number_punctuation(env):
+    """Formato do export real do SAJ: ' - ' em campo vazio, várias partes por célula ('NOME - CNPJ' por linha) e valor numérico."""
+    from app.mcfly import analisar, read_mcfly
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Relatórios"
+    ws.append(["Número do processo CNJ", "Polo ativo", "Polo passivo", "Classe SAJ", "Valor da causa", "Inscrições processo principal",
+               "Somatório inscrições (processo principal e vinculados)"])
+    A, B = "ALFA SIDERURGIA LTDA - 11.222.333/0001-81", "JOAO DA SILVA - 111.222.333-44"
+    ws.append(["0000010-10.2020.4.01.3811", " - ", f"{A}\n{B}\n", "67 - Execução Fiscal (SIDA)", 3392.84, "60 2 99 000866-03 | ATIVA | R$ 10,00", "R$ 10,00"])
+    ws.append(["0000011-11.2020.4.01.3811", " - ", f"BETA HOLDING LTDA - 22.333.444/0001-55\n{B}", "67 - Execução Fiscal (SIDA)", 10, " - ", "R$ 0,00"])
+    ws.append(["0000012-12.2020.4.01.3811", "MINISTERIO DA FAZENDA - 00.394.460/0001-41", "OUTRA EMPRESA SA - 99.888.777/0001-66", "67 - Execução Fiscal (SIDA)", 5, " - ", "R$ 5,00"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    rows = read_mcfly(io.BytesIO(buf.getvalue()))
+    assert len(rows) == 3 and "polo_ativo" not in rows[0] and rows[0]["valor_causa"] == "R$ 3.392,84" and "inscricoes" not in rows[1]
+    r = analisar(io.BytesIO(buf.getvalue()), "Grupo Alfa", {"00000111120204013811": {"oculto": False}})  # já no caso, com outra pontuação
+    assert [(g["processos"], g["do_caso"]) for g in r["grupos"]] == [(2, True), (1, False)]  # Alfa e Beta ligadas pelo sócio em comum
+    assert r["grupos"][0]["cita_caso"] and r["grupos"][0]["no_caso"] == 1 and r["grupos"][1]["principais"] == ["OUTRA EMPRESA SA"]
+    por = {p["numero"]: p for p in r["processos"]}
+    assert por["0000011-11.2020.4.01.3811"]["no_caso"] and por["0000010-10.2020.4.01.3811"]["partes"] == ["ALFA SIDERURGIA LTDA", "JOAO DA SILVA"]
+    assert por["0000012-12.2020.4.01.3811"]["suspeito"] and not por["0000012-12.2020.4.01.3811"]["marcar"] and r["fora_do_mcfly"] == []
+    c, _, _ = env
+    cid = c.post("/api/cases", json={"nome": "Grupo Alfa"}).json()["id"]
+    imp = c.post(f"/api/cases/{cid}/mcfly", files={"file": ("x.xlsx", buf.getvalue(), "application/octet-stream")},
+                 data={"selecionados": '["0000010-10.2020.4.01.3811"]'}).json()
+    assert imp == {"importados": 1, "novos": 1, "atualizados": 0}
+
+
+def test_chat_answer_becomes_chronology_lines():
+    resp = ("Sim, existem valores bloqueados:\n\n* **R$ 1.125,61** em nome de Divino (Evento 68, pg. 3).\n"
+            "* **R$ 233.644,19** em ativo escriturado (Evento 68, pgs. 4 a 5).\n* Sem origem nenhuma aqui.")
+    linhas, modo = ex.atos_da_resposta("Existe valor bloqueado pelo SISBAJUD?", resp, None)
+    assert modo == "regras" and linhas == ["Evento 68, pg. 3 - data não informada - R$ 1.125,61 em nome de Divino.",
+                                           "Evento 68, pg. 4 - data não informada - R$ 233.644,19 em ativo escriturado."]
+
+    class L:
+        def generate(self, system, user, max_tokens=1000):
+            assert "linhas de cronologia" in system and "SISBAJUD" in user
+            return ("- **Evento 68, pg. 3** – 10/05/2024 – Bloqueio via Sisbajud de R$ 1.125,61 em nome de Divino.\n"
+                    "Evento 99, pg. 1 - 01/01/2020 - Ato com origem que NÃO está na resposta.\nTexto solto.")
+    linhas, modo = ex.atos_da_resposta("Existe valor bloqueado pelo SISBAJUD?", resp, L())
+    assert modo == "ia" and linhas == ["Evento 68, pg. 3 - 10/05/2024 - Bloqueio via Sisbajud de R$ 1.125,61 em nome de Divino."]
+
+    class Fora:
+        def generate(self, *a, **k):
+            raise RuntimeError("503 UNAVAILABLE")
+    assert ex.atos_da_resposta("q", resp, Fora())[1] == "regras"  # IA fora do ar: cai para as regras
+    assert ex.atos_da_resposta("q", "Não encontrei essa informação.", None) == ([], "regras")
+
+
+def test_assistant_answer_goes_to_observations_in_chronology_format(env):
+    c, llm, tmp = env
+    cid, _ = _caso_com_pdf(c, tmp, "Obs")
+    base = f"/api/cases/{cid}/processes/{NUM}"
+    antes = c.get(base).json()["result"]["fields"]["observacoes"]
+    r = c.post(f"{base}/observacoes/assistente", json={"pergunta": "Há bloqueio?", "resposta": "Sim: **R$ 48.320,15** bloqueados (VOL 001, pg. 2)."}).json()
+    assert r["adicionadas"] == 1 and r["modo"] == "regras"  # o LLM de teste não devolve linhas no formato: valem as regras
+    obs = c.get(base).json()["result"]["fields"]["observacoes"]
+    assert antes.strip() in obs and obs.endswith("VOL 001, pg. 2 - data não informada - Sim: R$ 48.320,15 bloqueados.") and "**" not in obs
+    assert "[Assistente" not in obs and c.get(base).json()["reviewed"] == 0
+    assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "Há bloqueio?", "resposta": "Sim: **R$ 48.320,15** bloqueados (VOL 001, pg. 2)."}).json()["adicionadas"] == 0  # não duplica
+    assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "x", "resposta": "Não encontrei."}).json()["adicionadas"] == 0
+    assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Resposta do assistente"
+
+
+def test_standardize_list_converts_pasted_assistant_text_into_acts():
+    t = ("Evento 307, pg. 1 - 23/09/2026 - Juntada de auto.\n\n[Assistente · Existe valor bloqueado?]\nSim, existem valores bloqueados:\n\n"
+         "**R$ 1.125,61** em nome de Divino (Evento 68, pg. 3). **R$ 233.644,19** em ativo escriturado (Evento 68, pg. 4) e "
+         "**R$ 5,00** (cumprida parcialmente) (Evento 68, pgs. 1 a 5).\n\nNota do analista, sem citação.")
+    linhas = [x for x in ex.format_cronologia(t).split("\n") if x]
+    assert linhas == ["Evento 307, pg. 1 - 23/09/2026 - Juntada de auto.",
+                      "Evento 68, pg. 3 - data não informada - R$ 1.125,61 em nome de Divino.",
+                      "Evento 68, pg. 4 - data não informada - R$ 233.644,19 em ativo escriturado.",
+                      "Evento 68, pg. 1 - data não informada - R$ 5,00 (cumprida parcialmente).",
+                      "Nota do analista, sem citação."]
+    assert ex.format_cronologia("Evento 1 - 01/01/2020 - Sentença que\njulga procedente.") == "Evento 1 - 01/01/2020 - Sentença que julga procedente."
+
+
+def test_chat_rebuilds_lost_index_and_reads_the_cited_event_directly(env, monkeypatch):
+    from app import rag
+    c, llm, tmp = env
+    cid, d = _caso_com_pdf(c, tmp, "Chat")
+    st = c.app.state if hasattr(c.app, "state") else None
+    r1 = c.post("/api/chat", json={"question": "Existe valor bloqueado pelo SISBAJUD?", "case_id": cid, "numero": NUM}).json()
+    assert r1["sources"]
+    # simula a perda do índice (modo sem Docker reiniciado): a pergunta seguinte refaz o índice das páginas guardadas
+    from app.search.memory import MemoryStore
+    import gc
+    for o in gc.get_objects():
+        if isinstance(o, MemoryStore):
+            o._rows.clear()
+    r2 = c.post("/api/chat", json={"question": "Existe valor bloqueado pelo SISBAJUD?", "case_id": cid, "numero": NUM}).json()
+    assert r2["sources"] and r2["mode"] != "none"
+    # pergunta que cita um evento: as páginas dele vão direto para a IA
+    pages = [{"page": 1, "text": "capa do processo", "refs": {}}, {"page": 2, "text": "Detalhamento da ordem judicial de bloqueio de valores", "refs": {"evento": "68", "pg": "1"}}]
+    from app.config import Settings
+    s = Settings()
+    (s.data_dir / "pages").mkdir(parents=True, exist_ok=True)
+    (s.data_dir / "pages" / "docx.json").write_text(__import__("json").dumps(pages), encoding="utf-8")
+    hits = rag._citados("Pode avaliar o Evento 68?", [{"id": "docx"}], s)
+    assert [h.page for h in hits] == [2] and rag._citados("Qual o último andamento?", [{"id": "docx"}], s) == []
+
+
+RJ_PAYLOAD = {
+    "numero_rj": {"valor": "5001471-26.2023.8.13.0388", "origem": "VOL 001, pg. 1"}, "vara": {"valor": "Vara Única da Comarca de Luz", "origem": None},
+    "data_ajuizamento": {"valor": "2023-05-26", "origem": "VOL 001, pg. 1"}, "data_concessao": {"valor": "09/06/2025", "origem": "VOL 001, pg. 2"},
+    "pagamento_demais": {"valor": "Deságio de 70%, em 162 parcelas mensais, com a primeira ao final do 19º mês.", "origem": "VOL 001, pg. 2"},
+    "aprovado_agc": {"valor": "sim", "origem": "VOL 001, pg. 2"}, "homologado": {"valor": "SIM"}, "divida_total": {"valor": "45689758.53"},
+    "empresas": [{"nome": "Luza Indústria e Comércio de Alimentos S.A", "cnpj": "22.135.959/0006-81", "em_recuperacao_judicial": "SIM"},
+                 {"nome": "Arpere Representações Ltda.", "cnpj": "03.846.999/0001-82", "em_recuperacao_judicial": "SIM"}],
+    "classes": [{"classe": "Classe I – Trabalhistas", "valor_sujeito": "679866.20", "desagio_percentual": 0},
+                {"classe": "Classe III – Quirografários", "valor_sujeito": "R$ 43.511.215,56", "desagio_percentual": 70},
+                {"classe": "Classe IV – ME/EPP", "valor_sujeito": "R$ 1.498.676,77", "desagio_percentual": "70"}],
+    "qgc": [{"fonte": "Recuperandas", "data": "28/08/2023", "total": "R$ 100,00", "classes": [{"classe": "Classe I", "valor": "R$ 10,00"}, {"classe": "Classe III", "valor": "R$ 20,00"}]}],
+    "observacoes": [{"data": "19/10/2023", "texto": "A administradora judicial manifestou-se sobre o plano", "origem": "VOL 001, pg. 3"},
+                    {"data": "19/06/2023", "texto": "Apresentado o relatório de constatação prévia", "origem": "VOL 001, pg. 1"}]}
+
+
+def test_rj_classification_and_report_math_and_no_bullets():
+    from app import rj
+    from app.schemas import classify, resolve_tipo
+    assert classify("Recuperação Judicial")[0] == "rj" and resolve_tipo("recuperacao_judicial", "")[0] == "rj" and classify("Execução Fiscal")[0] == "execucoes_fiscais"
+    rel = rj.normalizar(RJ_PAYLOAD)
+    c = rel["campos"]
+    assert c["data_ajuizamento"]["valor"] == "26/05/2023" and c["aprovado_agc"]["valor"] == "SIM" and c["divida_total"]["valor"] == "R$ 45.689.758,53"
+    assert rel["classes"][0]["valor_sujeito"] == "R$ 679.866,20" and rel["classes"][2]["desagio_percentual"] == 70.0
+    calc = rj.calcular(rel)
+    esperado = (679866.20 * 0 + 43511215.56 * 70 + 1498676.77 * 70) / (679866.20 + 43511215.56 + 1498676.77)
+    assert calc["desagio"] == round(esperado, 2) == 68.96 and calc["base"] == "R$ 45.689.758,53" and len(calc["memoria"]) == 3
+    assert any("QGC (Recuperandas)" in a for a in calc["avisos"])  # classes somam R$ 30,00 mas o total informado é R$ 100,00
+    assert "PAGAMENTO DOS CRÉDITOS TRABALHISTAS (CLASSE I)" in calc["nao_consta"]  # campo não preenchido pela IA
+    texto = rj.texto_plano(rel, "5001471-26.2023.8.13.0388")
+    assert "Apresentado o relatório de constatação prévia" in texto and texto.index("19/06/2023") < texto.index("19/10/2023")  # cronologia em ordem de data
+    assert "Não consta nos documentos analisados: " in texto and "COMO O DESÁGIO PONDERADO FOI CALCULADO" in texto and "Total / média ponderada" in texto and "68,96%" in texto
+    assert not any(ch in texto for ch in "•●▪◦") and "\n- " not in texto  # sem marcadores
+    # visual law moderado: resumo executivo, linha do tempo e gráfico por classe; origens separadas do texto
+    tipos = [b[0] for b in rj.blocos(rel, "5001471-26.2023.8.13.0388")]
+    assert tipos[:2] == ["titulo", "resumo"] and "timeline" in tipos and "cartoes" in tipos and "barras" in tipos and "cronologia" in tipos
+    assert rj.segmentos("Aprovado em 22/08/2024 (ID 123, pg. 4) e homologado.") == [("Aprovado em 22/08/2024 ", False), ("(ID 123, pg. 4)", True), (" e homologado.", False)]
+    assert rj._frase("A União exigiu a certidão do art. 57 da Lei 11.101/2005 (ID 1, pg. 2). Depois outra frase.") == "A União exigiu a certidão do art. 57 da Lei 11.101/2005."
+    assert [d for _, d, _ in rj.datas_chave(rel)] == ["26/05/2023", "09/06/2025"]
+    # sem valor por classe, não inventa o deságio
+    assert rj.calcular(rj.normalizar({"classes": [{"classe": "Classe III", "desagio_percentual": 70}]}))["desagio"] is None
+
+
+def test_rj_end_to_end_report_edit_downloads_and_stays_out_of_the_spreadsheet(env):
+    import docx
+    import pymupdf
+    c, llm, tmp = env
+    llm.payload = dict(RJ_PAYLOAD)
+    cid = c.post("/api/cases", json={"nome": "Grupo Luza"}).json()["id"]
+    make_pdf(tmp / "a.pdf")
+    d = c.post("/api/documents", files={"file": ("5001471-26.2023.8.13.0388_V001.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")},
+               data={"case_id": cid, "tipo": "recuperacao_judicial"}).json()
+    wait(c, d["id"])
+    numero = "5001471-26.2023.8.13.0388"
+    base = f"/api/cases/{cid}/processes/{numero}"
+    system = llm.calls[-1]["system"]
+    assert "Relatório de Recuperação Judicial" in system and "NÃO use listas, tópicos, marcadores" in system  # o prompt novo, sem bullets
+    sheet = c.get(f"/api/cases/{cid}/sheet").json()
+    lin = next(l for l in sheet["linhas"] if l["numero"] == numero)
+    assert lin["aba"] == "rj" and lin["rj"]["desagio"] == 68.96 and lin["rj"]["empresas"][0].startswith("Luza") and lin["rj"]["homologado"] == "SIM"
+    assert next(a for a in sheet["abas"] if a["key"] == "rj")["n"] == 1 and next(a for a in sheet["abas"] if a["key"] == "execucoes_fiscais")["n"] == 0
+    rel = c.get(f"{base}/rj").json()
+    assert rel["calculo"]["desagio"] == 68.96 and any(f["chave"] == "fgts" for f in rel["campos"]) and [s["chave"] for s in rel["secoes"]][0] == "identificacao"
+    # edição: o analista corrige um valor e preenche um campo; o deságio é recalculado pelo código
+    r = rel["relatorio"]
+    r["classes"][1]["desagio_percentual"] = "50"
+    r["campos"]["fgts"] = {"valor": "O FGTS está incluído na Classe I.", "origem": "VOL 001, pg. 2"}
+    assert c.put(f"{base}/rj", json={"relatorio": r, "reviewed": True}).json()["calculo"]["desagio"] != 68.96
+    assert c.get(base).json()["reviewed"] == 1 and c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Edição do analista"
+    # Word e PDF
+    w = c.get(f"{base}/rj.docx")
+    assert w.status_code == 200 and "wordprocessingml" in w.headers["content-type"] and "Relatorio RJ" in w.headers["content-disposition"]
+    D = docx.Document(io.BytesIO(w.content))
+    corpo = "\n".join([p.text for p in D.paragraphs] + [c.text for t in D.tables for row in t.rows for c in row.cells])
+    assert "RELATÓRIO – RECUPERAÇÃO JUDICIAL" in corpo and "RESUMO EXECUTIVO" in corpo and "O FGTS está incluído na Classe I." in corpo and "(VOL 001, pg. 2)" in corpo
+    assert "Luza Indústria e Comércio de Alimentos S.A" in corpo
+    assert not any(p.style.name.lower().startswith("list") for p in D.paragraphs)  # nenhum parágrafo de lista
+    pdf = pymupdf.open(stream=c.get(f"{base}/rj.pdf").content)
+    assert "COMO O DESÁGIO PONDERADO FOI CALCULADO" in "".join(p.get_text() for p in pdf) and "RESUMO EXECUTIVO" in pdf[0].get_text()
+    # limpar relatório: zera tudo, mantém os PDFs e o relatório segue abrindo (vazio)
+    assert c.delete(f"{base}/rj").status_code == 200
+    vazio = c.get(f"{base}/rj").json()
+    assert not vazio["relatorio"]["empresas"] and not vazio["relatorio"]["classes"] and all(not x["valor"] for x in vazio["relatorio"]["campos"].values())
+    assert c.get(f"/api/cases/{cid}/documents").json()  # PDFs continuam
+    # fora da planilha de execuções e sem editar campos de planilha
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    assert all(numero not in [x.value for row in ws.iter_rows() for x in row] for ws in wb.worksheets)
+    assert c.put(f"{base}/review", json={"observacoes": "x", "reviewed": False}).status_code == 400
+    assert c.put(f"{base}/review", json={"reviewed": False}).status_code == 200
+    assert c.post(f"{base}/observacoes/assistente", json={"pergunta": "q", "resposta": "r (VOL 001, pg. 1)"}).status_code == 409
+    # processo que não é de RJ não tem relatório
+    cid2 = c.post("/api/cases", json={"nome": "Outro"}).json()["id"]
+    make_pdf(tmp / "b.pdf")
+    c.post("/api/documents", files={"file": (f"{NUM}_V001.pdf", (tmp / "b.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid2})
+    assert c.get(f"/api/cases/{cid2}/processes/{NUM}/rj").status_code == 404
+
+
+def test_batch_delete_and_retry_pdfs_only_reextracts_when_a_read_pdf_is_removed(env):
+    c, llm, tmp = env
+    cid, d_ok = _caso_com_pdf(c, tmp, "Lote")
+    # dois PDFs com erro (arquivo que não é PDF de verdade), do mesmo processo
+    ruins = [c.post("/api/documents", files={"file": (f"{NUM}_PARTE_{i}.pdf", b"%%PDF-1.4\nisto nao e um pdf de verdade %d" % i, "application/pdf")}, data={"case_id": cid}).json()["id"] for i in (2, 3)]
+    for i in ruins:
+        for _ in range(100):
+            if c.get(f"/api/documents/{i}").json()["status"] in ("error", "done"):
+                break
+            time.sleep(0.05)
+        assert c.get(f"/api/documents/{i}").json()["status"] == "error"
+    n = len(llm.calls)
+    r = c.post("/api/documents/lote", json={"ids": ruins + ["nao-existe"], "acao": "excluir"}).json()
+    assert r == {"acao": "excluir", "feitos": 2, "nao_encontrados": 1}
+    assert [x["id"] for x in c.get(f"/api/documents?case_id={cid}").json()] == [d_ok["id"]]
+    time.sleep(0.5)
+    p = c.get(f"/api/cases/{cid}/processes/{NUM}").json()
+    assert len(llm.calls) == n and p["result"] and p["stale"] == 0  # tirar PDF que nunca foi lido não refaz a extração
+    # reprocessar em lote
+    assert c.post("/api/documents/lote", json={"ids": [d_ok["id"]], "acao": "reprocessar"}).json()["feitos"] == 1
+    wait(c, d_ok["id"])
+    # excluir o PDF lido: aí sim o processo é atualizado (sem PDFs, fica sem erro)
+    assert c.post("/api/documents/lote", json={"ids": [d_ok["id"]], "acao": "excluir"}).json()["feitos"] == 1
+    assert c.get(f"/api/documents?case_id={cid}").json() == []
+    assert c.post("/api/documents/lote", json={"ids": [], "acao": "apagar"}).status_code == 400
+
+
+def test_pdf_read_error_is_explained_without_internal_paths():
+    from app.worker import explain_pdf_error
+    m = explain_pdf_error(RuntimeError("Failed to open file '/data/uploads/abc123.pdf' as type pdf."))
+    assert m.startswith("Não foi possível abrir este PDF") and "/data/uploads" not in m and "'abc123.pdf'" in m
+    assert "senha" in explain_pdf_error(ValueError("document is encrypted, password required"))
+
+
+def test_rj_new_pdfs_complement_the_report_without_erasing_or_overriding_edits(env):
+    from app import rj
+    c, llm, tmp = env
+    llm.payload = dict(RJ_PAYLOAD)
+    cid = c.post("/api/cases", json={"nome": "Grupo Luza"}).json()["id"]
+    numero = "5001471-26.2023.8.13.0388"
+    make_pdf(tmp / "a.pdf")
+    d1 = c.post("/api/documents", files={"file": (f"{numero}_PARTE_1.pdf", (tmp / "a.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid, "tipo": "recuperacao_judicial"}).json()
+    wait(c, d1["id"])
+    base = f"/api/cases/{cid}/processes/{numero}"
+    r = c.get(f"{base}/rj").json()["relatorio"]
+    r["campos"]["vara"] = {"valor": "Vara EDITADA pelo analista", "origem": None}  # edição do analista
+    r["empresas"].append({"nome": "Empresa Extra Ltda", "cnpj": "11.111.111/0001-11", "em_recuperacao_judicial": "SIM", "origem": None})
+    c.put(f"{base}/rj", json={"relatorio": r, "reviewed": True})
+    assert "campo:vara" in c.get(f"{base}/rj").json()["editados"]
+    # PDFs complementares: a IA agora devolve MENOS coisa (esqueceu empresas e a vara) e traz dados novos
+    llm.payload = {"vara": {"valor": "Vara diferente da IA"}, "fgts": {"valor": "FGTS incluído na Classe I.", "origem": "VOL 001, pg. 2"},
+                   "data_concessao": {"valor": "10/06/2025", "origem": "VOL 001, pg. 4"}, "numero_rj": {"valor": None},
+                   "empresas": [{"nome": "Luza Indústria e Comércio de Alimentos S.A", "cnpj": "22.135.959/0006-81", "em_recuperacao_judicial": "SIM"},
+                                {"nome": "Terceira Empresa S/A", "cnpj": "33.333.333/0001-33"}],
+                   "observacoes": [{"data": "01/07/2025", "texto": "Novo ato do processo", "origem": "VOL 001, pg. 5"}]}
+    make_pdf(tmp / "b.pdf")
+    d2 = c.post("/api/documents", files={"file": (f"{numero}_PARTE_2.pdf", (tmp / "b.pdf").read_bytes(), "application/pdf")}, data={"case_id": cid, "tipo": "recuperacao_judicial"}).json()
+    for _ in range(100):  # processo revisado: o PDF novo é lido, mas a extração só roda sob pedido (estado "novas partes")
+        if c.get(f"/api/documents/{d2['id']}").json()["status"] == "done":
+            break
+        time.sleep(0.1)
+    assert c.get(base).json()["stale"] == 1
+    assert c.post(f"{base}/reextract").status_code == 202  # padrão: complementar
+    for _ in range(120):
+        p = c.get(base).json()
+        if p["stale"] == 0 and p["result"].get("rj_merge"):
+            break
+        time.sleep(0.1)
+    sistema = c.get(f"{base}/rj").json()
+    rel = sistema["relatorio"]
+    cp = rel["campos"]
+    assert cp["vara"]["valor"] == "Vara EDITADA pelo analista"  # edição protegida
+    assert cp["numero_rj"]["valor"] == "5001471-26.2023.8.13.0388" and cp["aprovado_agc"]["valor"] == "SIM"  # o que a IA esqueceu NÃO some
+    assert cp["fgts"]["valor"] == "FGTS incluído na Classe I." and cp["data_concessao"]["valor"] == "10/06/2025"  # novo preenche; mais recente atualiza
+    nomes = [e["nome"] for e in rel["empresas"]]
+    assert "Empresa Extra Ltda" in nomes and "Terceira Empresa S/A" in nomes and len(nomes) == 4  # união das empresas, sem duplicar
+    assert len(rel["classes"]) == 3 and len(rel["observacoes"]) == 3 and rel["observacoes"][-1]["texto"] == "Novo ato do processo"
+    m = sistema["complemento"]
+    assert m["preenchidos"] >= 1 and m["atualizados"] >= 1 and m["linhas_novas"] >= 2 and m["mantidos_por_edicao"] == 1
+    assert c.get(f"{base}/history").json()["versoes"][0]["origem"] == "Complemento pela IA" and c.get(base).json()["reviewed"] == 0
+    # refazer do zero descarta tudo
+    llm.payload = {"vara": {"valor": "Só a vara"}}
+    c.post(f"{base}/reextract?modo=zero")
+    for _ in range(120):
+        p = c.get(base).json()
+        if p["stale"] == 0 and p["result"]["relatorio"]["campos"]["vara"]["valor"] == "Só a vara":
+            break
+        time.sleep(0.1)
+    assert c.get(f"{base}/rj").json()["relatorio"]["campos"]["numero_rj"]["valor"] is None and c.get(f"{base}/rj").json()["complemento"]["complemento"] is False
+
+
+def test_digitalizado_can_be_set_to_no_for_physical_processes_and_goes_to_the_sheet(env):
+    c, _, tmp = env
+    cid, _ = _caso_com_pdf(c, tmp, "Dig")
+    c.post(f"/api/cases/{cid}/mcfly", files={"file": ("m.xlsx", mcfly_xlsx(), "application/octet-stream")})
+    sheet = lambda: {l["numero"]: l for l in c.get(f"/api/cases/{cid}/sheet").json()["linhas"]}
+    assert sheet()[NUM]["valores"]["digitalizado"] == "SIM" and sheet()["0000001-00.2020.4.01.0000"]["valores"]["digitalizado"] == "NÃO"  # sem PDF: NÃO
+    assert c.put(f"/api/cases/{cid}/processes/{NUM}/digitalizado", json={"valor": "não"}).json()["digitalizado"] == "NÃO"
+    assert sheet()[NUM]["valores"]["digitalizado"] == "NÃO"  # escolha do analista (processo físico)
+    wb = load_workbook(io.BytesIO(c.get(f"/api/cases/{cid}/spreadsheet").content))
+    achados = []
+    for ws in wb.worksheets:
+        linhas = [[x.value for x in row] for row in ws.iter_rows()]
+        cab = next((i for i, h in enumerate(linhas[0] if linhas else []) if str(h).upper().startswith("PROCESSO DIGITALIZADO")), None)
+        achados += [l[cab] for l in linhas[1:] if cab is not None and NUM in l]
+    assert achados == ["NÃO"]
+    assert c.put(f"/api/cases/{cid}/processes/{NUM}/digitalizado", json={"valor": None}).json()["digitalizado"] is None and sheet()[NUM]["valores"]["digitalizado"] == "SIM"
+    assert c.put(f"/api/cases/{cid}/processes/{NUM}/digitalizado", json={"valor": "talvez"}).status_code == 400
+
+
+def test_rj_anchoring_fixes_invented_ids_and_flags_what_is_not_in_the_documents():
+    from app import rj
+    pages = [{"page": 1, "label": "ID 9819031806, pg. 1", "text": "RECUPERAÇÃO JUDICIAL nº 5001471-26.2023.8.13.0388. Pedido ajuizado em 26/05/2023 pela Luza Indústria e Comércio de Alimentos S.A, CNPJ 22.135.959/0006-81."},
+             {"page": 2, "label": "ID 9819031806, pg. 2", "text": "Os créditos trabalhistas somam R$ 2.494.814,24 e os quirografários R$ 141.975.732,16. O deságio proposto é de 85% para a Classe III."}]
+    rel = rj.normalizar({
+        "data_ajuizamento": {"valor": "26/05/2023", "origem": "ID 1111111111, pg. 9"},          # origem inventada, dado existe na pg. 1
+        "numero_rj": {"valor": "5001471-26.2023.8.13.0388", "origem": "ID 9819031806, pg. 1"},  # origem correta
+        "data_concessao": {"valor": "09/06/2025", "origem": "ID 9819031806, pg. 2"},           # data que NÃO está nos documentos
+        "aprovado_agc": {"valor": "SIM", "origem": "ID 0000000000, pg. 1"},                    # SIM/NÃO com origem inexistente
+        "situacao_atual": {"valor": "Os créditos quirografários somam R$ 141.975.732,16 (ID 9819031806, pg. 2) e foram homologados (ID 7777777777, pg. 3).", "origem": None},
+        "classes": [{"classe": "Classe III", "valor_sujeito": "R$ 141.975.732,16", "desagio_percentual": 85, "origem": "ID 5555, pg. 2"}],
+        "empresas": [{"nome": "Luza Indústria e Comércio de Alimentos S.A", "cnpj": "22.135.959/0006-81"}, {"nome": "Empresa Fantasma", "cnpj": "99.999.999/0001-99"}]})
+    info = rj.ancorar(rel, pages)
+    c = rel["campos"]
+    assert c["data_ajuizamento"]["origem"] == "ID 9819031806, pg. 1" and c["data_ajuizamento"]["verificado"] is True  # trocada pela página que contém o dado
+    assert c["numero_rj"]["origem"] == "ID 9819031806, pg. 1" and c["numero_rj"]["verificado"] is True
+    assert c["data_concessao"]["verificado"] is False and c["data_concessao"]["origem"] == "ID 9819031806, pg. 2"  # não localizado: marcado
+    assert c["aprovado_agc"]["origem"] is None and c["aprovado_agc"]["verificado"] is None  # origem inexistente some
+    assert "(ID 9819031806, pg. 2)" in c["situacao_atual"]["valor"] and "7777777777" not in c["situacao_atual"]["valor"]  # citação inventada sai do texto
+    assert rel["classes"][0]["origem"] == "ID 9819031806, pg. 2" and rel["classes"][0]["verificado"] is True
+    assert [e["verificado"] for e in rel["empresas"]] == [True, False]
+    assert info["nao_localizados"] >= 2 and info["corrigidos"] >= 2
+
+
+def test_rj_documents_are_sent_one_at_a_time_with_a_hint_and_only_new_ones_on_update(env):
+    c, llm, tmp = env
+    llm.payload = {"numero_rj": {"valor": "5001471-26.2023.8.13.0388", "origem": "VOL 001, pg. 1"}}
+    cid = c.post("/api/cases", json={"nome": "RJ docs"}).json()["id"]
+    numero = "5001471-26.2023.8.13.0388"
+    ids = []
+    for nome in ("Plano de Recuperacao Judicial", "Laudo de Avaliacao de Bens"):
+        make_pdf(tmp / "x.pdf")
+        r = c.post("/api/documents", files={"file": (f"{numero}_{nome.replace(' ', '_')}.pdf", (tmp / "x.pdf").read_bytes() + b"\n%" + nome.encode(), "application/pdf")}, data={"case_id": cid, "tipo": "recuperacao_judicial"})  # conteúdo distinto (sem deduplicar)
+        assert r.status_code == 202, r.text
+        ids.append(r.json()["id"])
+    for i in ids:
+        for _ in range(100):
+            if c.get(f"/api/documents/{i}").json()["status"] == "done":
+                break
+            time.sleep(0.1)
+    base = f"/api/cases/{cid}/processes/{numero}"
+    for _ in range(150):
+        p = c.get(base).json()
+        if p["stale"] == 0 and p["result"] and p["result"].get("rj_docs") and len(p["result"]["rj_docs"]) == 2:
+            break
+        time.sleep(0.1)
+    chamadas = [x for x in llm.calls if "schema" in x]
+    avisos = [x["user"] for x in chamadas if "ESCOPO: este é UM documento" in x["user"]]
+    assert len(avisos) >= 2 and any("plano de recuperação judicial" in a for a in avisos) and any("laudo de avaliação de bens" in a for a in avisos)
+    assert p["result"]["rj_merge"]["documentos"] >= 1 and p["result"]["rj_merge"]["chamadas"] >= 1
+    n = len(llm.calls)
+    c.post(f"{base}/reextract")  # nada novo desde a última vez: não chama a IA
+    time.sleep(0.8)
+    assert len(llm.calls) == n and c.get(f"{base}/rj").json()["complemento"].get("sem_novos") is True
+
+
+def test_extraction_left_running_by_a_restart_is_released_and_progress_is_exposed(tmp_path):
+    from app.db import MetadataDB
+
+    db = MetadataDB(tmp_path / "m.db")
+    db.mark_stale("c1", "5005640-32.2023.8.13.0105")
+    assert db.claim_extraction("c1", "5005640-32.2023.8.13.0105")  # stale=2: 'extraindo'
+    db.update_process("c1", "5005640-32.2023.8.13.0105", ext_started_at=time.time(), ext_progress="lendo 1 de 2: Plano.pdf")
+    assert db.get_process("c1", "5005640-32.2023.8.13.0105")["ext_progress"] == "lendo 1 de 2: Plano.pdf"
+    assert db.release_stuck_extractions(0) == [("c1", "5005640-32.2023.8.13.0105")]  # reinício: volta a 'aguardando' para refazer
+    assert db.get_process("c1", "5005640-32.2023.8.13.0105")["stale"] == 1
