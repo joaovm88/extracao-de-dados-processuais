@@ -366,6 +366,7 @@ function renderAssistInfo() {
     ${manualCard}
     ${sugCard(l)}
     ${l.error && !['extraindo', 'aguardando'].includes(l.estado) && !l.manual?.ativo ? cardErro(l) : ''}
+    ${l.estado === 'extraindo' ? `<div class="alert warn">⏳ IA extraindo${l.ext?.progresso ? ` — ${esc(l.ext.progresso)}` : ''}${l.ext?.inicio ? ` · há ${fmtT(Date.now() / 1000 - l.ext.inicio)}` : ''}. Se passar de uns 10 minutos, clique em “${l.aba === 'rj' && l.rj ? '⟳ Atualizar com os PDFs' : '⟳ Refazer extração'}” para destravar.</div>` : ''}
     ${l.citacoes_invalidas.length ? `<div class="alert err"><b>Citações que não existem no PDF</b> (conferir): ${esc(l.citacoes_invalidas.join('; '))}</div>` : ''}
     ${l.modo === 'sem_llm' ? '<div class="alert warn">A IA não estava configurada: esta extração está vazia.</div>' : ''}
     <div class="acts">${ed ? `<button class="btn sm primary" data-toggle-rev>${l.reviewed ? '↺ Marcar como a revisar' : '✓ Marcar como revisado'}</button>` : ''}

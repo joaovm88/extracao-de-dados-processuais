@@ -1576,3 +1576,15 @@ def test_rj_documents_are_sent_one_at_a_time_with_a_hint_and_only_new_ones_on_up
     c.post(f"{base}/reextract")  # nada novo desde a última vez: não chama a IA
     time.sleep(0.8)
     assert len(llm.calls) == n and c.get(f"{base}/rj").json()["complemento"].get("sem_novos") is True
+
+
+def test_extraction_left_running_by_a_restart_is_released_and_progress_is_exposed(tmp_path):
+    from app.db import MetadataDB
+
+    db = MetadataDB(tmp_path / "m.db")
+    db.mark_stale("c1", "5005640-32.2023.8.13.0105")
+    assert db.claim_extraction("c1", "5005640-32.2023.8.13.0105")  # stale=2: 'extraindo'
+    db.update_process("c1", "5005640-32.2023.8.13.0105", ext_started_at=time.time(), ext_progress="lendo 1 de 2: Plano.pdf")
+    assert db.get_process("c1", "5005640-32.2023.8.13.0105")["ext_progress"] == "lendo 1 de 2: Plano.pdf"
+    assert db.release_stuck_extractions(0) == [("c1", "5005640-32.2023.8.13.0105")]  # reinício: volta a 'aguardando' para refazer
+    assert db.get_process("c1", "5005640-32.2023.8.13.0105")["stale"] == 1

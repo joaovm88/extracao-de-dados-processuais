@@ -112,7 +112,7 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
                 db.update(d["id"], status="queued", error=None)
                 queue.enqueue(d["id"])
                 n += 1
-        for case_id, numero in db.release_stuck_extractions(1800):  # extração "rodando" há 30 min: o worker caiu, refaz
+        for case_id, numero in db.release_stuck_extractions(1200):  # extração "rodando" há 20 min: o worker caiu, refaz
             queue.enqueue(f"{READY_PREFIX}{case_id}")
             n += 1
         return n
@@ -128,6 +128,8 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         if s.queue_backend == "memory":  # o worker em memória reinicia junto com a API: tudo pendente é órfão
+            for case_id, _numero in db.release_stuck_extractions(0):  # extração que estava rodando morreu com o reinício: refaz já
+                queue.enqueue(f"{READY_PREFIX}{case_id}")
             for d in db.list():
                 if d["status"] in ("queued", "processing"):
                     db.update(d["id"], status="queued", error=None)

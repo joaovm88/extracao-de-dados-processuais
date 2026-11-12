@@ -93,7 +93,7 @@ def build(processes: list[dict], docs: list[dict], template_bytes: Optional[byte
             "manual": {"ativo": bool(p.get("manual")), "nota": p.get("manual_note"), "em": p.get("manual_at")},
             "oculto": bool(p.get("hidden")),
             "sugestoes": 0 if manual else sum(1 for k in ("bens", "fraudes") for i in res.get(k) or [] if item_status(i) == "sugerido"),
-            "ext": {"inicio": p.get("ext_started_at"), "fim": p.get("ext_finished_at"), "status": p.get("ext_status")},
+            "ext": {"inicio": p.get("ext_started_at"), "fim": p.get("ext_finished_at"), "status": p.get("ext_status"), "progresso": p.get("ext_progress")},
             "n_eventos": sum((d.get("metadata") or {}).get("n_eventos") or 0 for d in by_num.get(p["numero"], [])),
             "docs": [{**{k: d.get(k) for k in ("id", "filename", "status", "pages_done", "pages_total", "pages_ocr", "error", "started_at", "finished_at")},
                       "tempos": (d.get("metadata") or {}).get("tempos")} for d in by_num.get(p["numero"], [])]})

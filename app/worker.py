@@ -210,8 +210,10 @@ def _extrair_rj(case_id, numero, docs, pages, proc, prompt, sistema, result, llm
     rel, acum = antigo, {"preenchidos": 0, "atualizados": 0, "linhas_novas": 0, "mantidos_por_edicao": 0}
     anc = {"confirmados": 0, "corrigidos": 0, "nao_localizados": 0}
     t_ia, chamadas, enviadas, car_env, tok_in, tok_out = time.perf_counter(), 0, 0, 0, 0, 0
-    for d in novos:
-        for pedaco in rj.pedacos(por_doc[d["id"]], settings.rj_chunk_chars):
+    plano = [(d, pc) for d in novos for pc in rj.pedacos(por_doc[d["id"]], settings.rj_chunk_chars)]
+    for i, (d, pedaco) in enumerate(plano, 1):
+        if True:
+            db.update_process(case_id, numero, ext_progress=f"lendo {i} de {len(plano)}: {d['filename']}")  # a tela mostra o andamento
             ctx = "\n\n".join(f"=== [{p['label']}] ===\n{p['text']}" for p in pedaco)
             out = ex.extract_rj(prompt, ctx, llm, sistema, False, None, rj.dica_documento(d["filename"], pedaco[0]["text"]))
             for k, v in rj.ancorar(out, pedaco).items():
@@ -251,7 +253,7 @@ def extract_process(case_id: str, numero: str, settings: Settings, db: MetadataD
     if not db.claim_extraction(case_id, numero):
         return
     # nova tentativa: o erro anterior sai de cena e o registro de início/fim recomeça
-    db.update_process(case_id, numero, error=None, ext_started_at=time.time(), ext_finished_at=None, ext_status="rodando")
+    db.update_process(case_id, numero, error=None, ext_started_at=time.time(), ext_finished_at=None, ext_status="rodando", ext_progress="preparando a leitura")
     try:
         docs = db.docs_for_process(case_id, numero)
         if not docs:  # todos os PDFs do processo foram excluídos
