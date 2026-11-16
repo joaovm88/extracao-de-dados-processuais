@@ -1588,3 +1588,24 @@ def test_extraction_left_running_by_a_restart_is_released_and_progress_is_expose
     assert db.get_process("c1", "5005640-32.2023.8.13.0105")["ext_progress"] == "lendo 1 de 2: Plano.pdf"
     assert db.release_stuck_extractions(0) == [("c1", "5005640-32.2023.8.13.0105")]  # reinício: volta a 'aguardando' para refazer
     assert db.get_process("c1", "5005640-32.2023.8.13.0105")["stale"] == 1
+
+
+def test_export_with_template_missing_tabs_still_includes_every_process():
+    from app import template as tpl
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Relatório"
+    ws.append(["Número do processo CNJ", "Polo ativo"])
+    wb.create_sheet("Execução Fiscal").append(["Nº", "Número do processo judicial", "EXIT. GARANTIA"])  # singular: também é reconhecida
+    wb.create_sheet("Filtros").append(["x"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    mk = lambda n, sk, cl: {"numero": n, "mcfly": {"classe": cl}, "reviewed": 1, "result": {"sheet": sk, "fields": {"garantia": "IMÓVEL"}, "bens": [], "fraudes": []}}
+    procs = [mk(NUM, "execucoes_fiscais", "Execução Fiscal"), mk("0000009-99.2020.4.01.3811", "embargos", "Embargos à Execução Fiscal"),
+             mk("0000008-88.2020.4.01.3811", "outras_acoes", "Procedimento Comum")]
+    out = load_workbook(io.BytesIO(tpl.fill(buf.getvalue(), procs)))
+    assert out["Execução Fiscal"]["B2"].value == NUM
+    assert "Filtros" in out.sheetnames
+    achados = {ws.title: [c.value for r in ws.iter_rows(min_row=2) for c in r] for ws in out.worksheets}
+    assert any("0000009-99.2020.4.01.3811" in v for t, v in achados.items() if "Embargos" in t)  # aba que o modelo não tinha foi criada
+    assert any("0000008-88.2020.4.01.3811" in v for t, v in achados.items() if "Outras" in t)

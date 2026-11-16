@@ -185,3 +185,5 @@ Na janela **📎 PDFs**: caixas de seleção por arquivo, *Selecionar os com err
 - **Limpar relatório**: no editor do relatório de RJ, o botão "🗑 Limpar relatório" apaga todas as informações (campos, tabelas, edições e controle de documentos lidos) mantendo os PDFs; depois use "⟳ Atualizar com os PDFs" para gerar tudo de novo.
 
 - **Extração travada em "extraindo…"**: ao reiniciar o sistema, extrações que estavam em andamento voltam sozinhas para a fila; a tela mostra o andamento ("lendo 2 de 5: Plano.pdf · há 3 min") e orienta a destravar com "Atualizar com os PDFs"/"Refazer extração" após ~10 min.
+
+- **Exportação com planilha-modelo**: se o modelo não tiver a aba de algum tipo (ou o cabeçalho não for reconhecido), o sistema cria a aba padrão com os processos que ficariam de fora, em vez de omiti-los. "Execução Fiscal" no singular também é reconhecida. Processos de RJ continuam fora da planilha (têm relatório próprio em Word/PDF).

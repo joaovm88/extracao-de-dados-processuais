@@ -43,8 +43,8 @@ def sheet_kind(name: str) -> Optional[str]:
     n = norm(name)
     if n == "relatorio":
         return "relatorio"
-    for key, label in (("execucoes_fiscais", "execucoes fiscais"), ("embargos", "embargos"),
-                       ("outras_acoes", "outras acoes")):
+    for key, label in (("execucoes_fiscais", "execucoes fiscais"), ("execucoes_fiscais", "execucao fiscal"), ("embargos", "embargos"),
+                       ("outras_acoes", "outras acoes"), ("outras_acoes", "outra acao")):
         if label in n:
             return key
     if "outros bens" in n:
@@ -178,6 +178,7 @@ def item_row(kind: str, proc: dict, item: dict, anterior: Optional[dict] = None)
 def fill(data: bytes, processes: list[dict]) -> bytes:
     processes = [p for p in processes if not p.get("hidden") and not is_rj(p)]  # ocultos e processos de RJ (relatório próprio) não entram na planilha
     wb = load_workbook(io.BytesIO(data))
+    preenchidas: set = set()
     for ws in wb.worksheets:
         kind = sheet_kind(ws.title)
         if kind is None:
@@ -186,6 +187,7 @@ def fill(data: bytes, processes: list[dict]) -> bytes:
         found = _find_header_row(ws, hmap)
         if not found:
             continue
+        preenchidas.add(kind)
         hrow, cols, _ = found
         last = _last_data_row(ws, hrow)
         by_key = {k: c for c, k in cols.items()}
@@ -233,6 +235,9 @@ def fill(data: bytes, processes: list[dict]) -> bytes:
                 vals["ordem"] = last - hrow
                 write(last, vals, pend, only_empty=False)
                 existing[_digits(p["numero"])] = last
+    from .export import acrescentar_abas_faltantes
+
+    acrescentar_abas_faltantes(wb, processes, preenchidas)  # o modelo não tem a aba (ou não deu para ler): ela é criada, nada fica de fora
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()

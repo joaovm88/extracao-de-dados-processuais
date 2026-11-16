@@ -81,3 +81,52 @@ def build_case_xlsx(case: dict, processes: list[dict]) -> bytes:
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
+
+
+def acrescentar_abas_faltantes(wb: Workbook, processes: list[dict], preenchidas: set) -> list[str]:
+    """Planilha-modelo sem a aba de algum tipo (ou com layout ilegível): cria a aba padrão do sistema só com os processos/itens
+    que ficariam sem lugar. Devolve os nomes das abas criadas."""
+    criadas: list[str] = []
+
+    def nome(base: str) -> str:
+        n = base
+        while n in wb.sheetnames:
+            n += " (sistema)"
+        return n
+
+    por_aba: dict[str, list[dict]] = {}
+    for p in processes:
+        res = p.get("result")
+        por_aba.setdefault(res["sheet"] if res else classify((p.get("mcfly") or {}).get("classe") or "")[0], []).append(p)
+    for key, procs in por_aba.items():
+        if key in preenchidas or key not in SHEETS:
+            continue
+        sheet = SHEETS[key]
+        ws = _ws(wb, nome(sheet.name), [f.header for f in sheet.fields] + [ORDEM_HEADER, SITUACAO_HEADER], [28 if f.key != "observacoes" else 90 for f in sheet.fields] + [12, 34])
+        criadas.append(ws.title)
+        for p in procs:
+            m, res = p.get("mcfly") or {}, p.get("result")
+            fields = normalize_fields(sheet, res["fields"]) if res else {"digitalizado": "NÃO"}
+            if p.get("manual"):
+                fields, res = {"observacoes": manual_text(p)}, None
+            if p.get("digitalizado"):
+                fields["digitalizado"] = p["digitalizado"]
+            row = [p["numero"] if f.key == "numero" else (m.get(f.key) if f.source == "mcfly" else fields.get(f.key)) for f in sheet.fields]
+            _add(ws, row + [ws.max_row, situacao_analise(p)], bool(res) and not p.get("reviewed"))
+    for kind, itens_key, headers, cols, base, chaves in (
+            ("bens", "bens", BENS_HEADERS, [26, 50, 34, 14, 28, 60, 28], "Outros Bens", ("matricula", "caracteristicas", "proprietario", "ato", "gravames", "resumo", "situacao")),
+            ("fraude", "fraudes", FRAUDE_HEADERS, [28, 24, 40, 70, 18], "Alegações de Fraude", ("numero", "classe", "tipo", "analise", "valor_causa"))):
+        if kind in preenchidas:
+            continue
+        linhas = []
+        for p in processes:
+            anterior = None
+            for it in itens_autorizados(p, itens_key):
+                linhas.append([item_row(kind, p, it, anterior).get(k) for k in chaves])
+                anterior = it
+        if linhas:
+            ws = _ws(wb, nome(base), headers, cols)
+            criadas.append(ws.title)
+            for r in linhas:
+                _add(ws, r)
+    return criadas
