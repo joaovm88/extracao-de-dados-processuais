@@ -1609,3 +1609,23 @@ def test_export_with_template_missing_tabs_still_includes_every_process():
     achados = {ws.title: [c.value for r in ws.iter_rows(min_row=2) for c in r] for ws in out.worksheets}
     assert any("0000009-99.2020.4.01.3811" in v for t, v in achados.items() if "Embargos" in t)  # aba que o modelo não tinha foi criada
     assert any("0000008-88.2020.4.01.3811" in v for t, v in achados.items() if "Outras" in t)
+
+
+def test_login_protects_everything_when_users_are_configured(env, monkeypatch):
+    c, _, _ = env
+    assert c.get("/api/cases").status_code == 200  # sem APP_USERS: uso local, sem login
+    monkeypatch.setenv("APP_USERS", "joao:s3nha-forte,ana:outra")
+    c.cookies.clear()
+    assert c.get("/api/health").json()["login"] is True
+    assert c.get("/api/cases").status_code == 401
+    r = c.get("/", follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/login.html"
+    assert c.get("/login.html").status_code == 200
+    assert c.post("/api/login", json={"usuario": "joao", "senha": "errada"}).status_code == 401
+    assert c.post("/api/login", json={"usuario": "joao", "senha": "s3nha-forte"}).status_code == 200
+    assert c.get("/api/cases").status_code == 200 and c.get("/").status_code == 200
+    c.cookies.set("sessao", "joao|9999999999|assinatura-falsa")
+    assert c.get("/api/cases").status_code == 401  # cookie forjado não passa
+    assert c.post("/api/login", json={"usuario": "ana", "senha": "outra"}).status_code == 200
+    monkeypatch.setenv("APP_USERS", "joao:s3nha-forte")  # usuário removido / senha trocada: sessão antiga cai
+    assert c.get("/api/cases").status_code == 401

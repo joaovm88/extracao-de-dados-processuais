@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import logging
 import threading
@@ -161,13 +162,50 @@ def create_app(settings: Settings | None = None, llm_client=None) -> FastAPI:
         logging.getLogger("api").exception("Erro em %s %s", request.method, request.url.path)
         return JSONResponse(status_code=500, content={"detail": f"Erro interno ({type(exc).__name__}): {exc}"})
 
+    from . import auth
+
+    @app.middleware("http")
+    async def exige_login(request: Request, call_next):
+        """Com APP_USERS/APP_PASSWORD definidos (deploy), tudo exige login, menos a tela de entrada e o /api/health."""
+        if not auth.ativo() or request.url.path in auth.LIVRES or auth.validar(request.cookies.get(auth.COOKIE)):
+            return await call_next(request)
+        if request.url.path.startswith("/api/"):
+            return JSONResponse(status_code=401, content={"detail": "Sessão expirada. Entre de novo."})
+        from fastapi.responses import RedirectResponse
+
+        return RedirectResponse("/login.html", status_code=303)
+
+    @app.post("/api/login")
+    async def login(request: Request):
+        try:
+            body = await request.json()
+        except Exception:  # noqa: BLE001
+            body = {}
+        if not auth.ativo():
+            return {"ok": True}
+        usuario = str(body.get("usuario") or "")
+        if not auth.confere(usuario, str(body.get("senha") or "")):
+            await asyncio.sleep(1.5)  # freia tentativas de adivinhar a senha
+            logging.getLogger("api").warning("Login recusado para %r", usuario[:40])
+            raise HTTPException(401, "Usuário ou senha incorretos.")
+        resp = JSONResponse({"ok": True, "usuario": usuario})
+        https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+        resp.set_cookie(auth.COOKIE, auth.emitir(usuario), max_age=int(auth.horas() * 3600), httponly=True, samesite="lax", secure=https)
+        return resp
+
+    @app.post("/api/logout")
+    def logout():
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(auth.COOKIE)
+        return resp
+
     @app.get("/api/health")
     def health():
         modelo = (s.gemini_model if llm and llm.name == "gemini" else s.llm_model if llm else None)
         return {"ok": True, "queue": s.queue_backend, "search": s.search_backend, "llm": llm.name if llm else None,
                 "versao": APP_VERSION, "modelo": modelo, "reserva": s.gemini_fallback_model or None,
                 "raciocinio": s.gemini_thinking if llm and llm.name == "gemini" else s.llm_effort if llm else None,
-                "contexto_chars": s.context_budget_chars}
+                "contexto_chars": s.context_budget_chars, "login": auth.ativo()}
 
     @app.post("/api/format/observacoes")
     def format_observacoes(body: TextIn):

@@ -187,3 +187,7 @@ Na janela **📎 PDFs**: caixas de seleção por arquivo, *Selecionar os com err
 - **Extração travada em "extraindo…"**: ao reiniciar o sistema, extrações que estavam em andamento voltam sozinhas para a fila; a tela mostra o andamento ("lendo 2 de 5: Plano.pdf · há 3 min") e orienta a destravar com "Atualizar com os PDFs"/"Refazer extração" após ~10 min.
 
 - **Exportação com planilha-modelo**: se o modelo não tiver a aba de algum tipo (ou o cabeçalho não for reconhecido), o sistema cria a aba padrão com os processos que ficariam de fora, em vez de omiti-los. "Execução Fiscal" no singular também é reconhecida. Processos de RJ continuam fora da planilha (têm relatório próprio em Word/PDF).
+
+## Deploy de teste (acesso pelo navegador)
+
+Para usar o sistema de qualquer computador, sem IDE: servidor na nuvem com login, HTTPS automático e um só container. Passo a passo em [docs/DEPLOY.md](docs/DEPLOY.md) (`docker-compose.deploy.yml`). O login só é exigido quando `APP_USERS` está definido; o uso local continua igual.

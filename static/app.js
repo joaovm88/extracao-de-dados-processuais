@@ -5,6 +5,7 @@ const json = (m, b) => ({ method: m, headers: {'Content-Type': 'application/json
 const api = async (url, opt) => {
   const r = await fetch(url, opt); let j = {};
   try { j = await r.json(); } catch (_) { /* resposta sem JSON */ }
+  if (r.status === 401 && !url.startsWith('/api/login')) { location.href = '/login.html'; throw new Error('Sessão expirada. Entre de novo.'); }
   if (!r.ok) { const d = j.detail; throw new Error(typeof d === 'string' ? d : Array.isArray(d) ? d.map(x => x.msg).join('; ') : `Falha HTTP ${r.status}`); }
   return j;
 };
@@ -830,7 +831,9 @@ applyTheme(document.documentElement.dataset.theme || 'light');
 
 /* ---------- inicialização ---------- */
 api('/api/tipos').then(t => { schema = t; for (const [k, v] of Object.entries(t.tipos)) $('tipo').add(new Option(v, k)); for (const [k, v] of Object.entries(t.sistemas)) $('sistema').add(new Option(v, k)); });
+$('sair').onclick = async () => { await fetch('/api/logout', {method: 'POST'}); location.href = '/login.html'; };
 api('/api/health').then(h => {
+  $('sair').hidden = !h.login;
   $('llm').textContent = h.llm ? `IA ativa · ${h.modelo || h.llm}` : 'IA desativada (sem chave)';
   $('llm').title = `Versão ${h.versao} · modelo ${h.modelo || '—'}${h.reserva ? ` (reserva ${h.reserva})` : ''} · raciocínio ${h.raciocinio || 'padrão'} · contexto ${fmtN(h.contexto_chars)} caracteres`;
   const v = $('versao'); if (v) v.textContent = `Versão ${h.versao}`;

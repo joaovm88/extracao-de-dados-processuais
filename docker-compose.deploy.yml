@@ -1,0 +1,38 @@
+# Deploy de TESTE em um servidor (VM na nuvem): um só container do sistema (fila e busca em memória) + Caddy com HTTPS automático.
+# Uso no servidor:  docker compose -f docker-compose.deploy.yml up -d --build
+# Precisa de um .env ao lado com: SITE_DOMAIN, APP_USERS e a chave da IA (veja docs/DEPLOY.md).
+x-env: &env
+  QUEUE_BACKEND: memory
+  SEARCH_BACKEND: memory
+  DATA_DIR: /data
+  APP_USERS: ${APP_USERS:?Defina APP_USERS no .env (usuario:senha) - sem login o sistema ficaria aberto na internet}
+  APP_SECRET: ${APP_SECRET:-}
+  APP_SESSION_HOURS: ${APP_SESSION_HOURS:-12}
+  LLM_PROVIDER: ${LLM_PROVIDER:-auto}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+  GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-pro-preview}
+  GEMINI_FALLBACK_MODEL: ${GEMINI_FALLBACK_MODEL:-}
+  GEMINI_THINKING: ${GEMINI_THINKING:-low}
+  GEMINI_THINKING_FALLBACK: ${GEMINI_THINKING_FALLBACK:-}
+  GEMINI_TIMEOUT_S: ${GEMINI_TIMEOUT_S:-240}
+  LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5-5}
+  LLM_EFFORT: ${LLM_EFFORT:-low}
+  CONTEXT_BUDGET_CHARS: ${CONTEXT_BUDGET_CHARS:-400000}
+  RJ_CHUNK_CHARS: ${RJ_CHUNK_CHARS:-150000}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
+services:
+  app:
+    build: .
+    environment: *env
+    volumes: ["data:/data", "./prompts:/srv/prompts:ro"]
+    expose: ["8000"]          # só o Caddy fala com o sistema; nada exposto direto na internet
+    restart: unless-stopped
+  caddy:
+    image: caddy:2-alpine
+    environment: { SITE_DOMAIN: "${SITE_DOMAIN:?Defina SITE_DOMAIN no .env (ex.: 34-95-10-20.sslip.io)}" }
+    ports: ["80:80", "443:443"]
+    volumes: ["./deploy/Caddyfile:/etc/caddy/Caddyfile:ro", "caddydata:/data", "caddyconfig:/config"]
+    depends_on: [app]
+    restart: unless-stopped
+volumes: { data: {}, caddydata: {}, caddyconfig: {} }

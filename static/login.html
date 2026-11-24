@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Entrar · Análise de Processos</title><link rel="stylesheet" href="app.css">
+<style>
+  body{display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
+  .login{width:min(360px,calc(100vw - 32px));padding:28px;border:1px solid var(--line,#d0d7e2);border-radius:14px;background:var(--card,#fff)}
+  .login h1{font-size:18px;margin:0 0 4px}.login p{margin:0 0 18px;font-size:13px;opacity:.75}
+  .login label{display:block;font-size:13px;margin:10px 0 4px}.login input{width:100%;box-sizing:border-box;padding:9px 10px;border-radius:8px;border:1px solid var(--line,#c4ccd8);font:inherit}
+  .login button{margin-top:18px;width:100%}.login .err{color:#b3261e;font-size:13px;min-height:18px;margin-top:10px}
+</style></head>
+<body><form class="login" id="f">
+  <h1>§ Análise de Processos</h1><p>Ambiente de testes. Entre com o usuário e a senha que você recebeu.</p>
+  <label for="u">Usuário</label><input id="u" autocomplete="username" required>
+  <label for="p">Senha</label><input id="p" type="password" autocomplete="current-password" required>
+  <button class="btn primary" type="submit">Entrar</button><div class="err" id="e"></div>
+</form>
+<script>
+document.getElementById('f').onsubmit = async ev => {
+  ev.preventDefault();
+  const r = await fetch('/api/login', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({usuario: document.getElementById('u').value.trim(), senha: document.getElementById('p').value})});
+  if (r.ok) location.href = '/'; else document.getElementById('e').textContent = (await r.json().catch(() => ({}))).detail || 'Não foi possível entrar.';
+};
+</script></body></html>
