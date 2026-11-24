@@ -267,3 +267,91 @@ def test_dockerfile_copies_every_runtime_directory():
     dockerfile = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
     for pasta in ("app", "static", "prompts"):
         assert f"COPY {pasta} {pasta}" in dockerfile
+
+
+def test_chat_returns_clear_message_when_llm_is_overloaded(tmp_path, monkeypatch):
+    """503 do Gemini no chat vira mensagem clara (HTTP 503), não 'Erro interno'."""
+    class Sobrecarregado:
+        name = "g"
+        def extract(self, *a): return {"observacoes": "x"}
+        def generate(self, *a, **k): raise RuntimeError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+
+    app = _env_app(tmp_path, monkeypatch, llm=Sobrecarregado())
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app) as c:
+        with pdf.open("rb") as f:
+            up = c.post("/api/documents", data={"case_id": case["id"]}, files={"file": ("x.pdf", f, "application/pdf")}).json()
+        for _ in range(150):
+            ps = c.get(f"/api/cases/{case['id']}").json()["processos"]
+            if ps and ps[0]["estado"] == "pronto":
+                break
+            time.sleep(0.1)
+        r = c.post("/api/chat", json={"question": "Há bloqueio?", "case_id": case["id"], "numero": ps[0]["numero"]})
+    assert r.status_code == 503
+    assert "indisponível ou lento" in r.json()["detail"] and "Erro interno" not in r.json()["detail"]
+
+
+def test_format_corresponsaveis_endpoint(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path / "d"))
+    with TestClient(create_app(Settings())) as c:
+        r = c.post("/api/format/corresponsaveis", json={"texto": "João Victor CPF 52998224725; BETA LTDA CNPJ 11222333000181"})
+        assert r.json()["texto"] == "João Victor - CPF: 529.982.247-25\nBETA LTDA - CNPJ: 11.222.333/0001-81"
+        assert c.post("/api/format/corresponsaveis", json={"texto": "  "}).json() == {"texto": ""}
+
+
+def test_queue_contains_tells_whether_a_job_is_waiting():
+    from app.queue import MemoryQueue
+
+    q = MemoryQueue()
+    q.enqueue("a")
+    assert q.contains("a") and not q.contains("b")
+
+
+def test_watchdog_requeues_lost_pdfs_but_not_young_or_still_queued_ones(tmp_path, monkeypatch):
+    """PDF 'na fila' cujo pedido se perdeu (ex.: Redis reiniciado) volta sozinho para a fila."""
+    import time as _t
+
+    app = _env_app(tmp_path, monkeypatch)
+    pdf = tmp_path / "x.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app) as c:
+        db = app.state.db
+        db.create("perdido", "x.pdf", str(pdf), case["id"], numero_processo="1234567-89.2023.8.26.0100")  # status 'queued', nunca enfileirado
+        db.create("novo", "y.pdf", str(pdf), case["id"], numero_processo="1234567-89.2023.8.26.0200")
+        db._conn.execute("UPDATE documents SET updated_at=? WHERE id='perdido'", (_t.time() - 200,))
+        db._conn.commit()
+        assert app.state.recover() == 1  # só o antigo e ausente da fila; o recém-criado ainda está dentro do prazo
+        for _ in range(100):
+            if db.get("perdido")["status"] == "done":
+                break
+            _t.sleep(0.1)
+        assert db.get("perdido")["status"] == "done" and db.get("novo")["status"] == "queued"
+        # antigo, mas o pedido ainda está na fila: não duplica
+        db._conn.execute("UPDATE documents SET updated_at=? WHERE id='novo'", (_t.time() - 200,))
+        db._conn.commit()
+        monkeypatch.setattr(app.state.queue, "contains", lambda i: True)
+        assert app.state.recover() == 0
+
+
+def test_a_stuck_pdf_only_holds_back_its_own_process(tmp_path, monkeypatch):
+    """Antes, um PDF parado na fila segurava a extração de TODOS os processos do caso."""
+    import time as _t
+
+    app = _env_app(tmp_path, monkeypatch, llm=type("L", (), {"name": "f", "extract": lambda self, *a: {"observacoes": "ok"},
+                                                              "generate": lambda self, *a, **k: "x"})())
+    pdf = tmp_path / "1234567-89.2023.8.26.0100.pdf"
+    make_pdf(pdf, image_page=False)
+    case = app.state.db.create_case("c")
+    with TestClient(app) as c:
+        app.state.db.create("parado", "0000009-00.2020.4.01.0000.pdf", str(pdf), case["id"], numero_processo="0000009-00.2020.4.01.0000")  # fica na fila
+        with pdf.open("rb") as f:
+            c.post("/api/documents", data={"case_id": case["id"], "tipo": "execucao_fiscal"}, files={"file": (pdf.name, f, "application/pdf")})
+        for _ in range(150):
+            ps = {p["numero"]: p for p in c.get(f"/api/cases/{case['id']}").json()["processos"]}
+            if ps.get("1234567-89.2023.8.26.0100", {}).get("estado") == "pronto":
+                break
+            _t.sleep(0.1)
+        assert ps["1234567-89.2023.8.26.0100"]["estado"] == "pronto"  # extraído mesmo com o outro PDF parado

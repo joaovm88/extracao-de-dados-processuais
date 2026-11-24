@@ -8,7 +8,13 @@ x-env: &env
   GEMINI_API_KEY: ${GEMINI_API_KEY:-}
   GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.1-pro-preview}
   GEMINI_FALLBACK_MODEL: ${GEMINI_FALLBACK_MODEL:-}
+  GEMINI_THINKING: ${GEMINI_THINKING:-low}
+  GEMINI_THINKING_FALLBACK: ${GEMINI_THINKING_FALLBACK:-}
+  GEMINI_TIMEOUT_S: ${GEMINI_TIMEOUT_S:-240}
+  LLM_MODEL: ${LLM_MODEL:-claude-sonnet-5-5}
+  LLM_EFFORT: ${LLM_EFFORT:-low}
   CONTEXT_BUDGET_CHARS: ${CONTEXT_BUDGET_CHARS:-400000}
+  RJ_CHUNK_CHARS: ${RJ_CHUNK_CHARS:-150000}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   DATA_DIR: /data
 services:
@@ -16,7 +22,7 @@ services:
     build: .
     environment: *env
     ports: ["8000:8000"]
-    volumes: ["data:/data"]
+    volumes: ["data:/data", "./prompts:/srv/prompts:ro"]   # prompts editáveis sem rebuild: edite e use "Refazer extração"
     restart: on-failure
     depends_on:
       redis: { condition: service_started }
@@ -25,7 +31,7 @@ services:
     build: .
     command: python -m app.run_worker
     environment: *env
-    volumes: ["data:/data"]
+    volumes: ["data:/data", "./prompts:/srv/prompts:ro"]   # prompts editáveis sem rebuild: edite e use "Refazer extração"
     restart: on-failure
     depends_on:
       redis: { condition: service_started }
@@ -33,6 +39,8 @@ services:
     deploy: { replicas: 2 }
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes   # a fila sobrevive a reinicializações
+    volumes: ["redisdata:/data"]
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
     environment: { discovery.type: single-node, xpack.security.enabled: "false", ES_JAVA_OPTS: "-Xms1g -Xmx1g" }
@@ -43,4 +51,4 @@ services:
       timeout: 5s
       retries: 40
       start_period: 20s
-volumes: { data: {}, esdata: {} }
+volumes: { data: {}, esdata: {}, redisdata: {} }

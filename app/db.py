@@ -11,14 +11,21 @@ from typing import Any, Optional
 _JSON_COLS = ("metadata", "result", "mcfly")
 # stale: 0 = extração em dia | 1 = há material novo a extrair | 2 = extraindo agora
 _PROC_COLS = {"result": "TEXT", "reviewed": "INTEGER DEFAULT 0", "stale": "INTEGER DEFAULT 0", "classe": "TEXT",
-              "sheet": "TEXT", "tipo": "TEXT", "sistema": "TEXT", "error": "TEXT"}
+              "sheet": "TEXT", "tipo": "TEXT", "sistema": "TEXT", "error": "TEXT",
+              # registro da última extração por IA: início/fim (epoch) e resultado ('rodando' | 'ok' | 'erro')
+              "ext_started_at": "REAL", "ext_finished_at": "REAL", "ext_status": "TEXT", "ext_progress": "TEXT",
+              # processo feito à mão pelo analista: a IA não mexe nele e a planilha registra isso
+              "manual": "INTEGER DEFAULT 0", "manual_note": "TEXT", "manual_at": "REAL",
+              "hidden": "INTEGER DEFAULT 0",
+              "digitalizado": "TEXT"}  # escolha do analista para a coluna "Processo digitalizado" (SIM/NÃO; NÃO = processo físico)  # oculto: sai da tabela e da planilha exportada, sem apagar nada
 
 
 # Colunas de documents adicionadas ao longo das versões: bancos antigos (volume do Docker) são migrados na abertura.
 _DOC_COLS = {"case_id": "TEXT", "numero_processo": "TEXT", "volume": "INTEGER", "evento": "TEXT", "tipo": "TEXT",
              "sistema": "TEXT", "parte": "INTEGER", "page_start": "INTEGER DEFAULT 1", "classe": "TEXT",
              "pages_total": "INTEGER DEFAULT 0", "pages_done": "INTEGER DEFAULT 0", "pages_ocr": "INTEGER DEFAULT 0",
-             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL", "sha256": "TEXT"}
+             "error": "TEXT", "metadata": "TEXT", "created_at": "REAL", "updated_at": "REAL", "sha256": "TEXT",
+             "started_at": "REAL", "finished_at": "REAL"}  # leitura do PDF: início e fim (êxito ou erro)
 
 
 class MetadataDB:
@@ -40,6 +47,10 @@ class MetadataDB:
                     parte INTEGER, page_start INTEGER DEFAULT 1, classe TEXT, pages_total INTEGER DEFAULT 0,
                     pages_done INTEGER DEFAULT 0, pages_ocr INTEGER DEFAULT 0, error TEXT, metadata TEXT,
                     created_at REAL, updated_at REAL, sha256 TEXT);
+                CREATE TABLE IF NOT EXISTS history (
+                    id TEXT PRIMARY KEY, case_id TEXT NOT NULL, numero TEXT NOT NULL, at REAL, origem TEXT, resumo TEXT,
+                    snapshot TEXT);
+                CREATE INDEX IF NOT EXISTS history_proc ON history (case_id, numero, at);
                 """
             )
             have = {r["name"] for r in self._conn.execute("PRAGMA table_info(processes)")}
@@ -90,6 +101,51 @@ class MetadataDB:
             r = self._conn.execute("SELECT * FROM cases WHERE nome='Avulsos'").fetchone()
         return dict(r) if r else self.create_case("Avulsos")
 
+    def delete_case(self, cid: str) -> None:
+        """Remove o caso com seus processos e registros de PDFs (os arquivos são apagados por quem chama)."""
+        with self._lock:
+            for t in ("documents", "processes", "history"):
+                self._conn.execute(f"DELETE FROM {t} WHERE case_id=?", (cid,))
+            self._conn.execute("DELETE FROM cases WHERE id=?", (cid,))
+            self._conn.commit()
+
+    def delete_process(self, case_id: str, numero: str) -> None:
+        """Remove o processo e o seu histórico (os PDFs são apagados por quem chama)."""
+        with self._lock:
+            self._conn.execute("DELETE FROM history WHERE case_id=? AND numero=?", (case_id, numero))
+            self._conn.execute("DELETE FROM processes WHERE case_id=? AND numero=?", (case_id, numero))
+            self._conn.commit()
+
+    # ---- histórico de versões do resultado de cada processo
+    HISTORY_MAX = 40
+
+    def add_history(self, case_id: str, numero: str, origem: str, resumo: str, snapshot: dict) -> str:
+        hid = uuid.uuid4().hex
+        with self._lock:
+            self._conn.execute("INSERT INTO history VALUES (?,?,?,?,?,?,?)",
+                               (hid, case_id, numero, time.time(), origem, resumo, json.dumps(snapshot, ensure_ascii=False)))
+            self._conn.execute(
+                "DELETE FROM history WHERE case_id=? AND numero=? AND id NOT IN "
+                "(SELECT id FROM history WHERE case_id=? AND numero=? ORDER BY at DESC, rowid DESC LIMIT ?)",
+                (case_id, numero, case_id, numero, self.HISTORY_MAX))
+            self._conn.commit()
+        return hid
+
+    def list_history(self, case_id: str, numero: str) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT id, at, origem, resumo FROM history WHERE case_id=? AND numero=? "
+                                      "ORDER BY at DESC, rowid DESC", (case_id, numero)).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_history(self, case_id: str, numero: str, hid: str) -> Optional[dict]:
+        with self._lock:
+            r = self._conn.execute("SELECT * FROM history WHERE case_id=? AND numero=? AND id=?", (case_id, numero, hid)).fetchone()
+        if not r:
+            return None
+        d = dict(r)
+        d["snapshot"] = json.loads(d["snapshot"]) if d["snapshot"] else {}
+        return d
+
     def list_cases(self) -> list[dict]:
         with self._lock:
             return [dict(r) for r in self._conn.execute("SELECT * FROM cases ORDER BY created_at DESC")]
@@ -121,6 +177,16 @@ class MetadataDB:
         with self._lock:
             self._conn.execute("UPDATE processes SET stale=1 WHERE case_id=? AND numero=?", (case_id, numero))
             self._conn.commit()
+
+    def release_stuck_extractions(self, older_than_s: float) -> list[tuple[str, str]]:
+        """Extrações 'rodando' há mais tempo que o limite (worker caiu no meio): voltam a 'aguardando' para serem refeitas."""
+        corte = time.time() - older_than_s
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT case_id, numero FROM processes WHERE stale=2 AND (ext_started_at IS NULL OR ext_started_at < ?)", (corte,)).fetchall()
+            self._conn.execute("UPDATE processes SET stale=1 WHERE stale=2 AND (ext_started_at IS NULL OR ext_started_at < ?)", (corte,))
+            self._conn.commit()
+        return [(r["case_id"], r["numero"]) for r in rows]
 
     def claim_extraction(self, case_id: str, numero: str) -> bool:
         """Reserva atômica: só um worker extrai cada processo."""
@@ -169,10 +235,16 @@ class MetadataDB:
                 rows = self._conn.execute("SELECT * FROM documents ORDER BY created_at DESC").fetchall()
         return [self._row(r) for r in rows]
 
-    def pending_docs(self, case_id: str) -> int:
+    def pending_docs(self, case_id: str, numero: Optional[str] = None) -> int:
+        """PDFs do caso ainda na fila/processando. Com `numero`: só os que podem ser desse processo
+        (mesmo nº ou nº ainda desconhecido); PDF de OUTRO processo não o segura."""
+        sql = "SELECT COUNT(*) FROM documents WHERE case_id=? AND status IN ('queued','processing')"
+        args: tuple = (case_id,)
+        if numero is not None:
+            sql += " AND (numero_processo IS NULL OR numero_processo=?)"
+            args = (case_id, numero)
         with self._lock:
-            return self._conn.execute(
-                "SELECT COUNT(*) FROM documents WHERE case_id=? AND status IN ('queued','processing')", (case_id,)).fetchone()[0]
+            return self._conn.execute(sql, args).fetchone()[0]
 
     def docs_for_process(self, case_id: str, numero: str) -> list[dict]:
         """Partes do processo, na ordem dos autos (volume, parte, página inicial)."""

@@ -2,6 +2,29 @@ import os
 from pathlib import Path
 
 
+def load_dotenv(path: str | Path = ".env") -> int:
+    """Lê um arquivo .env (CHAVE=valor) para o ambiente, sem sobrescrever o que já estiver definido. Para rodar sem Docker
+    (o Docker Compose já lê o .env sozinho). Devolve quantas variáveis definiu."""
+    p = Path(path)
+    if not p.is_file():
+        return 0
+    n = 0
+    for linha in p.read_text(encoding="utf-8-sig").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, valor = linha.split("=", 1)
+        chave, valor = chave.strip(), valor.strip()
+        if valor[:1] in ("'", '"') and valor[-1:] == valor[:1] and len(valor) >= 2:
+            valor = valor[1:-1]
+        else:
+            valor = valor.split(" #", 1)[0].strip()  # comentário no fim da linha
+        if chave and chave not in os.environ:
+            os.environ[chave] = valor
+            n += 1
+    return n
+
+
 class Settings:
     def __init__(self) -> None:
         env = os.environ.get
@@ -16,9 +39,19 @@ class Settings:
         self.gemini_model = env("GEMINI_MODEL", "gemini-3.1-pro-preview")
         # Modelo reserva usado só quando o principal fica sobrecarregado (503) após as novas tentativas. Opcional.
         self.gemini_fallback_model = env("GEMINI_FALLBACK_MODEL", "")
+        # Esforço de raciocínio do Gemini: minimal | low | medium | high | (vazio = padrão do modelo). "low" acelera bastante a extração.
+        self.gemini_thinking = env("GEMINI_THINKING", "low")
+        # Nível do modelo reserva (alguns modelos não aceitam "minimal"). Vazio = usa o mesmo de GEMINI_THINKING.
+        self.gemini_thinking_fallback = env("GEMINI_THINKING_FALLBACK", "")
+        # Tempo máximo de cada tentativa (s). Passou disso, tenta de novo em vez de ficar esperando uma chamada travada.
+        self.gemini_timeout_s = float(env("GEMINI_TIMEOUT_S", "240"))
         self.anthropic_api_key = env("ANTHROPIC_API_KEY", "")
         self.llm_model = env("LLM_MODEL", "claude-sonnet-5-5")
+        # Esforço de raciocínio do Claude (modelos 5.x): low | medium | high | xhigh | max. Menos = mais rápido e barato.
+        self.llm_effort = env("LLM_EFFORT", "low")
         # Texto máximo enviado ao LLM por processo (≈ 4 caracteres por token). Reduza no nível gratuito do Gemini.
+        # Recuperação Judicial: tamanho máximo de cada bloco enviado à IA (um documento por vez; documento maior vira vários blocos)
+        self.rj_chunk_chars = int(env("RJ_CHUNK_CHARS", "150000"))
         self.context_budget_chars = int(env("CONTEXT_BUDGET_CHARS", "400000"))
         self.ocr_lang = env("OCR_LANG", "por")
         self.ocr_dpi = int(env("OCR_DPI", "200"))

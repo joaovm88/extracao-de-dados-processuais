@@ -1,0 +1,19 @@
+# HTTPS automático (Let's Encrypt) para o domínio do .env. Sem domínio próprio, use <IP-com-hífens>.sslip.io
+{$SITE_DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 500MB
+	}
+	reverse_proxy app:8000 {
+		transport http {
+			read_timeout 10m
+			write_timeout 10m
+		}
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Referrer-Policy no-referrer
+	}
+}
